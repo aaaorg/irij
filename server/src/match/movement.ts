@@ -1,5 +1,6 @@
-// Movement handler — zpracování Op.MOVE_REQUEST a tile-by-tile advance v matchLoop.
-// Viz docs/03-message-katalog.md sekce Movement + Rate limiting + Constraints.
+// Movement handler — zpracování Op.MOVE_REQUEST a path-based broadcast model.
+// Viz docs/03-message-katalog.md sekce Movement + Rate limiting + Constraints
+// + docs/04-tech-adr.md ADR-019 (path-based broadcast).
 //
 // Pipeline handleMoveRequest:
 //   1. Parse + validate payload shape → 'malformed'
@@ -7,17 +8,27 @@
 //   3. Stunned check (4b stub, Phase 6 implementuje) → 'stunned'
 //   4. In-bounds check (target floored to int) → 'out_of_bounds'
 //   5. Walkable check + nearestWalkable BFS fallback (radius 8) → 'no_path'
-//   6. A* pathfind from presence.position to effective target → 'too_far'
-//   7. Uložit path + pathStartedAt do presence (spread + reassign per Goja rule)
+//   6. A* pathfind from CURRENT position to effective target → 'too_far'
+//      (current = ps.position pokud presence stojí; jinak computeCurrentPosition
+//       z aktivního path — change-mid-path-cíle musí navázat na aktuální tile,
+//       ne na starý path start).
+//   7. Uložit nový path + pathStartedAt + position(=from) do presence (spread +
+//      reassign per Goja rule), pathConsumed=0.
+//   8. Broadcast ENTITY_MOVED **JEDNOU** s celou path do 3×3 chunkového okolí.
 //
 // Position advance v matchLoop (advanceMovement):
+//   - Server stále tracká aktuální tile pro chunk index + pozdější autosave
+//     (Phase 5) + anti-cheat dosah validaci (Phase 6+). Path advance logic
+//     udržuje state v sync s tím, co klient lerpuje na základě jednoho
+//     ENTITY_MOVED broadcast.
 //   - Pro každého presence s path.length > 0:
-//     - tilesAdvanced = floor((tick - pathStartedAt) * MOVEMENT_SPEED_TPS_BASE / TICK_HZ)
-//     - newConsumed = min(tilesAdvanced, path.length)
-//     - Pop (newConsumed - pathConsumed) tilů z hlavy path; nová position = poslední pop
-//     - Pokud chunk se změnil → updatuj presencesByChunk
-//     - Broadcast ENTITY_MOVED do 3×3 chunkového okolí
-//     - Pokud path skončil → clear path + pathStartedAt + pathConsumed
+//     - tilesAdvanced = floor((tick - pathStartedAt) * speed / TICK_HZ)
+//     - Pokud tilesAdvanced > pathConsumed → newPos = path[tilesAdvanced - 1]
+//     - Update chunk index, presence position
+//     - Pokud pathConsumed dosáhl path.length → clear path state
+//   - **ŽÁDNÝ broadcast z matchLoop** (změna oproti původnímu 4b: per-tile
+//     ENTITY_MOVED odstraněn — klient lerpuje na základě jednorázové broadcast
+//     z handleMoveRequest, per ADR-019).
 //
 // Goja constraint: nikdy nemutuj presence object přes referenci. Vždy
 //   state.presencesByUserId[userId] = { ...state.presencesByUserId[userId], ... };
@@ -38,6 +49,7 @@ import {
   broadcastToChunkArea,
   chunkKeyOf,
   movePresenceBetweenChunks,
+  type PlayerPresenceState,
   type WorldMatchState,
 } from './state.js';
 import { isInBounds, isWalkable, nearestWalkable } from './walkable.js';
@@ -68,9 +80,41 @@ export interface MoveHandlerResult {
   clientSeq: number;
 }
 
+// computeCurrentPosition: pokud presence má aktivní path, spočte tile, na kterém
+// by měl právě být na základě (currentTick - pathStartedAt) * speed / TICK_HZ.
+// Použito pro change-mid-path-cíle: nový path A* musí začít z aktuální mid-path
+// pozice, ne ze starého ps.position (ten zaostává o "ještě neapplied" advance).
+export function computeCurrentPosition(
+  ps: PlayerPresenceState,
+  currentTick: number,
+): Position {
+  if (!ps.path || ps.path.length === 0) {
+    return { x: ps.position.x, y: ps.position.y };
+  }
+  const ticksElapsed = currentTick - ps.pathStartedAt;
+  const tilesShouldHaveMoved = Math.floor(
+    (ticksElapsed * MOVEMENT_SPEED_TPS_BASE) / TICK_HZ,
+  );
+  const totalTilesInPath = ps.pathConsumed + ps.path.length;
+  const effectiveAdvanced = Math.max(
+    ps.pathConsumed,
+    Math.min(tilesShouldHaveMoved, totalTilesInPath),
+  );
+  if (effectiveAdvanced <= ps.pathConsumed) {
+    return { x: ps.position.x, y: ps.position.y };
+  }
+  // path[i] index i je tile co se dosáhne po (pathConsumed + i + 1) krocích.
+  // Po `effectiveAdvanced` krocích je current = path[effectiveAdvanced - pathConsumed - 1].
+  const idx = effectiveAdvanced - ps.pathConsumed - 1;
+  const tile = ps.path[idx];
+  if (!tile) return { x: ps.position.x, y: ps.position.y };
+  return { x: tile.x, y: tile.y };
+}
+
 export function handleMoveRequest(
   state: WorldMatchState,
   logger: nkruntime.Logger,
+  dispatcher: nkruntime.MatchDispatcher,
   presence: nkruntime.Presence,
   rawData: string,
   tick: number,
@@ -135,31 +179,73 @@ export function handleMoveRequest(
     effectiveTarget = snap;
   }
 
-  // 6) A* pathfind
-  const path = findPath(state.walkable, ps.position, effectiveTarget, {
+  // 6) A* pathfind. Pokud presence už má aktivní path (klikla znovu mid-path),
+  //    začni z **aktuální** pozice po lerpu, ne z původního path startu —
+  //    jinak by se klient teleportoval zpět při change-cíle.
+  const fromPos: Position = computeCurrentPosition(ps, tick);
+  const path = findPath(state.walkable, fromPos, effectiveTarget, {
     maxPathLength: MAX_PATH_LENGTH_TILES,
   });
   if (path === null) {
     logger.info(
-      `move rejected userId=${userId.slice(0, 8)} reason=too_far from=(${ps.position.x},${ps.position.y}) target=(${effectiveTarget.x},${effectiveTarget.y})`,
+      `move rejected userId=${userId.slice(0, 8)} reason=too_far from=(${fromPos.x},${fromPos.y}) target=(${effectiveTarget.x},${effectiveTarget.y})`,
     );
     return { ok: false, reason: 'too_far', clientSeq: req.client_seq };
   }
+  if (path.length === 0) {
+    // from === to po snap. Žádný pohyb, ale request je validní — neposílej
+    // ENTITY_MOVED (klient nemá co lerpovat). Just ack přes ok=true.
+    state.presencesByUserId = {
+      ...state.presencesByUserId,
+      [userId]: {
+        ...ps,
+        position: fromPos,
+        path: [],
+        pathStartedAt: 0,
+        pathConsumed: 0,
+        clientSeq: req.client_seq,
+      },
+    };
+    return { ok: true, clientSeq: req.client_seq };
+  }
 
-  // 7) Uložit path do presence — spread + reassign (Goja nested mutation gotcha).
+  // 7) Update server-side state. Position se snape na current (mid-path
+  //    catchup), nový path se uloží s pathStartedAt = tick, pathConsumed = 0.
+  //    Goja rule: spread + reassign celou top-level mapu, nemutuj nested.
+  // Pokud chunk se změnil oproti starému position (ps.position) → sync index.
+  const oldChunk = ps.lastChunk;
+  const newChunk = chunkKeyOf(fromPos);
+  if (oldChunk !== newChunk) {
+    movePresenceBetweenChunks(state, userId, ps.position, fromPos);
+  }
+
   state.presencesByUserId = {
     ...state.presencesByUserId,
     [userId]: {
       ...ps,
+      position: fromPos,
       path,
       pathStartedAt: tick,
       pathConsumed: 0,
       clientSeq: req.client_seq,
+      lastChunk: newChunk,
     },
   };
 
+  // 8) Broadcast ENTITY_MOVED **jednou** do 3×3 chunkového okolí. Klient
+  //    lokálně buildí TweenChain z path a lerpuje plynule per-tile bez čekání
+  //    na další server update (per ADR-019).
+  const movedPayload: EntityMoved = {
+    entity_id: userId,
+    from: fromPos,
+    path,
+    speed_tps: MOVEMENT_SPEED_TPS_BASE,
+    started_at_tick: tick,
+  };
+  broadcastToChunkArea(dispatcher, state, newChunk, Op.ENTITY_MOVED, movedPayload);
+
   logger.debug(
-    `move accepted userId=${userId.slice(0, 8)} from=(${ps.position.x},${ps.position.y}) to=(${effectiveTarget.x},${effectiveTarget.y}) steps=${path.length}`,
+    `move accepted userId=${userId.slice(0, 8)} from=(${fromPos.x},${fromPos.y}) to=(${effectiveTarget.x},${effectiveTarget.y}) steps=${path.length}`,
   );
 
   return { ok: true, clientSeq: req.client_seq };
@@ -175,14 +261,20 @@ export function broadcastMoveRejected(
   dispatcher.broadcastMessage(Op.MOVE_REJECTED, JSON.stringify(payload), [presence]);
 }
 
-// advanceMovement — volá se z matchLoop každý tick. Pro každý presence s aktivním
-// path spočte, kolik tilů se mělo posunout (na základě MOVEMENT_SPEED_TPS_BASE),
-// popne odpovídající počet z hlavy path, broadcastne ENTITY_MOVED na každý tile
-// boundary do 3×3 chunkového okolí. Nechá float position serveru jako integer —
-// klient interpoluje mezi přijatými pozicemi (smooth lerp).
+// advanceMovement — volá se z matchLoop každý tick. Per ADR-019 udržuje
+// **server-side state** (ps.position, chunk index) v sync s tím, co klient
+// lerpuje. ENTITY_MOVED se broadcastuje JEN 1× při handleMoveRequest, ne tady.
+//
+// Server tracká integer tile coords pro:
+//   - Chunk index (presencesByChunk) — broadcast scope determinaci
+//   - Pozdější autosave (Phase 5: snapshotuje current_position do Player blobu)
+//   - Anti-cheat dosah validaci (Phase 6+: server musí vědět, kde hráč JE,
+//     ne kde byl při startu pathu)
+//   - Late-join WORLD_SNAPSHOT (joiner musí dostat current position a zbytek
+//     path pro plynulý lerp)
 export function advanceMovement(
   state: WorldMatchState,
-  dispatcher: nkruntime.MatchDispatcher,
+  _dispatcher: nkruntime.MatchDispatcher,
   tick: number,
 ): void {
   const userIds = Object.keys(state.presencesByUserId);
@@ -218,7 +310,7 @@ export function advanceMovement(
 
     // Spread + reassign whole presence entry (Goja nested mutation rule).
     // Pokud path skončil, vyčisti pathStartedAt + pathConsumed na 0 aby další
-    // request měl čistý baseline. Při path.length>0 udržujeme akumulované hodnoty.
+    // request měl čistý baseline.
     const finished = remaining.length === 0;
     state.presencesByUserId = {
       ...state.presencesByUserId,
@@ -232,16 +324,8 @@ export function advanceMovement(
       },
     };
 
-    // Broadcast ENTITY_MOVED do 3×3 chunkového okolí. Posíláme z newChunk
-    // (ne oldChunk), aby noví příjemci v cílovém chunku dostali update i kdyby
-    // hráč právě překročil chunk boundary z mimo-jejich-okolí.
-    const movedPayload: EntityMoved = {
-      entity_id: userId,
-      from: fromPos,
-      to: newPos,
-      speed_tps: MOVEMENT_SPEED_TPS_BASE,
-      server_tick: tick,
-    };
-    broadcastToChunkArea(dispatcher, state, newChunk, Op.ENTITY_MOVED, movedPayload);
+    // ENTITY_MOVED se broadcastuje jen 1× per MOVE_REQUEST per ADR-019;
+    // matchLoop udržuje server-side position state pro chunk index a pozdější
+    // autosave (Phase 5), ale neposílá per-tile zprávy.
   }
 }
