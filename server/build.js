@@ -17,6 +17,10 @@ const config = {
   outfile: OUTFILE,
   platform: 'neutral',
   external: ['nakama-runtime'],
+  // .tmj jsou Tiled JSON exporty (mapy). Esbuild umí JSON nativně, ale custom
+  // extension musí být explicitně namapována. Phase 4a importuje test_50x50.tmj
+  // do server bundle pro WalkableMask init.
+  loader: { '.tmj': 'json' },
   logLevel: 'info',
 };
 

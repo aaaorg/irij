@@ -8,6 +8,7 @@
 
 import { authPing } from './rpc/auth.js';
 import { profileCreateCharacter, profileGetSelf } from './rpc/profile.js';
+import { worldFindOrCreateMatch } from './rpc/world.js';
 import {
   matchInit,
   matchJoinAttempt,
@@ -32,6 +33,9 @@ export function InitModule(
   // Profile RPCs
   initializer.registerRpc('rpc.profile.get_self', profileGetSelf);
   initializer.registerRpc('rpc.profile.create_character', profileCreateCharacter);
+
+  // World RPCs
+  initializer.registerRpc('rpc.world.find_or_create_match', worldFindOrCreateMatch);
 
   // Match handlers — Nakama vyžaduje object s shorthand property references na top-level
   // pojmenované funkce (ne method shorthand / function literal).

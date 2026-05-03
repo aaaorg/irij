@@ -14,6 +14,23 @@ export const JOB_BOARD_GENERATION_INTERVAL = 18000; // 30 min
 export const MOVEMENT_SPEED_TPS_BASE = 3; // tiles per second
 export const MAX_PATH_LENGTH_TILES = 64;
 
+// Walkable mask — gid → walkable bool. Phase 3 placeholder tileset má jen 3 dlaždice
+// (grass=1, dirt=2, water=3). Voda je non-walkable, zbytek walkable.
+// TODO: parsovat z tileset.tiles[].properties.walkable, jakmile designeři potřebují
+// per-tile granularitu (Phase 18 polish, plná Blatiny mapa).
+export const NON_WALKABLE_TILE_GIDS: ReadonlySet<number> = new Set<number>([3]);
+
+// Broadcast scope per ADR-007: hráč vidí 3×3 chunkové okolí kolem svého chunku
+// (Chebyshev distance ≤ 1). Movement broadcasts, spawn/despawn jdou jen presencím
+// v tomto okolí, ne celý match.
+export const BROADCAST_CHUNK_RADIUS = 1;
+
+// Když klient pošle MOVE_REQUEST na non-walkable tile (např. click na vodu),
+// server si fallbackem najde nejbližší walkable v BFS radius. Konstanta
+// definovaná tady už v 4a, aby v 4b nebyla rozesetá. Hodnota 8 = ~čtvrtina
+// chunku, dostatečná pro UX edge cases.
+export const NEAREST_WALKABLE_BFS_RADIUS = 8;
+
 // World scaling
 // TILE_SIZE_PX je legacy konstanta (logický scale faktor pro UI/HUD calculations).
 // Skutečný render je isometric 2:1 dimetric — viz ADR-018 a klient render konstanty
