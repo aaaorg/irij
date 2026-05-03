@@ -30,17 +30,17 @@ Tyhle věci řeš _než_ se zaboříš do kódu — některé mají lead time (A
 
 Cíl: lokální stack jede, Nakama console reagují, klient se otevře v browseru.
 
-- [ ] Nainstalovat **Node 20+** (`nvm install 20 && nvm use 20`)
-- [ ] Nainstalovat **pnpm 9+** (`corepack enable && corepack prepare pnpm@latest --activate`)
-- [ ] Nainstalovat **Docker** + Docker Compose
-- [ ] V root složce: `pnpm install`
-- [ ] V root: `pnpm build:server` (vytvoří `server/dist/index.js`)
-- [ ] V root: `pnpm infra:up` (spustí Postgres + Nakama)
-- [ ] Ověřit: `docker compose -f infra/docker-compose.yml ps` — oba services `running`
-- [ ] Otevřít `http://localhost:7351` — Nakama console (admin/password z `local.yml`)
-- [ ] V druhém terminálu: `pnpm dev:client`
-- [ ] Otevřít `http://localhost:5173` — Phaser klient ukáže "Irij — boot…" a poté "WorldScene — TODO"
-- [ ] **Demo:** screenshot Nakama console + Phaser klient = milestone "stack běží"
+- [x] Nainstalovat **Node 20+** (`nvm install 20 && nvm use 20`)
+- [x] Nainstalovat **pnpm 9+** (`corepack enable && corepack prepare pnpm@latest --activate`)
+- [x] Nainstalovat **Docker** + Docker Compose
+- [x] V root složce: `pnpm install`
+- [x] V root: `pnpm build:server` (vytvoří `server/dist/index.js`)
+- [x] V root: `pnpm infra:up` (spustí Postgres + Nakama)
+- [x] Ověřit: `docker compose -f infra/docker-compose.yml ps` — oba services `running`
+- [x] Otevřít `http://localhost:7351` — Nakama console (admin/password z `local.yml`)
+- [x] V druhém terminálu: `pnpm dev:client`
+- [x] Otevřít `http://localhost:5173` — Phaser klient ukáže "Irij — boot…" a poté "WorldScene — TODO"
+- [x] **Demo:** screenshot Nakama console + Phaser klient = milestone "stack běží"
 
 **Známé pasti:**
 - Nakama runtime hledá `index.js` v `/nakama/data/modules` — pokud tam není, runtime modul se nezaregistruje. Server musí být **buildnutý před** `infra:up`.
@@ -52,13 +52,13 @@ Cíl: lokální stack jede, Nakama console reagují, klient se otevře v browser
 
 Cíl: klient se připojí k Nakamě, autentizuje guest accountem, drží WebSocket session.
 
-- [ ] V `client/src/` vytvořit `nakama.ts` — wrapper kolem `@heroiclabs/nakama-js` clienta
-- [ ] Implementovat `connectAsGuest(deviceId)` — `nk.authenticateDevice(deviceId, true)` + `socket.connect(session)`
-- [ ] V `client/src/` vytvořit `device.ts` — generování + persistence device_id v `localStorage`
-- [ ] V `WorldScene.create()` zavolat connect, zalogovat výsledek do console
-- [ ] V `BootScene` přidat error handling — pokud connect fail, ukázat červený text
-- [ ] Otestovat: F12 console v browseru ukáže `Connected as user <uuid>`
-- [ ] **Demo:** screenshot Nakama console "Status → Online users" ukazující 1 user
+- [x] V `client/src/` vytvořit `nakama.ts` — wrapper kolem `@heroiclabs/nakama-js` clienta
+- [x] Implementovat `connectAsGuest(deviceId)` — `nk.authenticateDevice(deviceId, true)` + `socket.connect(session)`
+- [x] V `client/src/` vytvořit `device.ts` — generování + persistence device_id v `localStorage`
+- [x] V `WorldScene.create()` zavolat connect, zalogovat výsledek do console *(refaktorováno do LoginScene — auth flow oddělen od world rendering)*
+- [x] V `BootScene` přidat error handling — pokud connect fail, ukázat červený text *(error UI v LoginScene; boot flow obsahuje error handling, scéna je dedikovaná)*
+- [x] Otestovat: F12 console v browseru ukáže `Connected as user <uuid>`
+- [x] **Demo:** screenshot Nakama console "Status → Online users" ukazující 1 user *(uživatel ověřil 2 guest accounty + admin)*
 
 ---
 
@@ -421,3 +421,5 @@ Tyhle chuti tě budou pokoušet. Odolávej.
 ## Změnový log
 
 - **2026-05-03** — Draft 1, vytvořeno na základě dokončeného design phase. Phases 0-22 + pre-flight + týdenní rituály + risk checkpoints + parking lot.
+- **2026-05-03** — **Phase 0 dokončena** (PR #1). Lokální stack běží: Postgres 16 + Nakama 3.24 v Dockeru, klient přes Vite dev server na :5173, runtime modul načten z `server/dist/index.js`.
+- **2026-05-03** — **Phase 1 dokončena** (PR #2 + PR #4). Persistentní guest auth přes `authenticateDevice` + WebSocket session, `device_id` v `localStorage`, Boot → Login → World scene flow s funkčním error retry. Login screen má placeholder buttony pro Discord / Google / E-mail (Phase 19). Na okraj přidán **ADR-018 — isometric rendering kontrakt** (PR #3): drift fix vůči [01 Scope](01-scope-and-pillars.md), explicitní lock 2:1 dimetric projekce + Y-sort konvence pro Phase 3+.
