@@ -4,11 +4,19 @@
 // Žádný globální iterace nad celým světem — vždy spatial lookup přes chunkový index.
 // Per ADR-007: 3×3 chunkové broadcast scope (Chebyshev distance ≤ BROADCAST_CHUNK_RADIUS).
 //
-// **Goja constraint:** Nakama JS runtime serializuje match state mezi callbacks
-// (matchInit → matchJoin → matchLoop → ...) přes JSON. To znamená že `Map` a `Set`
-// instance jsou stripnuté na plain objects — proto používáme `Record<string, X>`
-// místo `Map<string, X>` a `Record<string, true>` (object-as-set) místo `Set<string>`.
-// WalkableMask má vlastní serializability uvnitř (Uint8Array → JSON pole).
+// **Goja constraint:** Nakama JS runtime mezi handler voláními Export()-uje
+// state do Go `map[string]interface{}` a rekonstruuje fresh Goja objekty přes
+// `stateObject.Set(k, v)` (viz runtime_javascript_match_core.go). Důsledek:
+//   1. `Map` a `Set` instance se stripnou na plain objects — proto
+//      `Record<string, X>` místo `Map<string, X>` a `Record<string, true>`
+//      (object-as-set) místo `Set<string>`.
+//   2. **Mutace nested objektů přes referenci se ZTRATÍ** mezi handler calls.
+//      Vždy spread + reassign celého top-level fieldu:
+//          state.x = { ...state.x, foo: bar };
+//      ne:
+//          state.x.foo = bar;  // ztratí se na další callback
+//      To platí i pro presence state, paths, chunk buckets — vše níže to
+//      respektuje.
 
 import { BROADCAST_CHUNK_RADIUS, CHUNK_SIZE_TILES } from 'irij-shared/constants';
 import type { Position } from 'irij-shared/types';
@@ -22,16 +30,28 @@ export interface PlayerPresenceState {
   hpMax: number;
   lastChunk: string; // chunkKey kde se hráč naposledy nacházel (pro chunk-crossing diff)
   joinedAt: number; // ms timestamp pro debug / autosave delta v Phase 5
+  // 4b movement state. `path` je pole zbývajících tile coords k projít — index 0 je
+  // nejbližší další tile, end je finální target. Když path.length===0, hráč stojí.
+  // `pathStartedAt` je server tick, kdy začal aktuální path advance (pro speed math).
+  // `pathConsumed` je počet tile boundaries překročených od pathStartedAt (pro
+  // diff "kolik nových tilů popnout v tomto loopu"). `clientSeq` echo posledního
+  // přijatého MOVE_REQUEST pro reconciliation v 4c.
+  path: Position[];
+  pathStartedAt: number;
+  pathConsumed: number;
+  clientSeq: number;
 }
 
 export interface WorldMatchState {
   tick: number;
   walkable: WalkableMask;
-  // Plain object místo Map kvůli Goja JSON-serializaci match state mezi callbacks.
+  // Plain object místo Map kvůli Goja state-serializaci mezi callbacks.
   presencesByUserId: { [userId: string]: PlayerPresenceState };
   // Plain object místo Map<string, Set<string>>; vnitřní set je Record<userId, true>.
   presencesByChunk: { [chunkKey: string]: { [userId: string]: true } };
-  // TODO Phase 4b: paths: { [userId]: Path } (A* result, tile-by-tile advance v matchLoop)
+  // 4b: per-userId timestampy posledních N MOVE_REQUESTů (ms epoch). Sliding window
+  // pro rate limit 10/s. Trim probíhá při každém checku v handleMoveRequest.
+  moveRequestLog: { [userId: string]: number[] };
   // TODO Phase 6: mobSpawns: { [spawnId]: MobInstanceState }
 }
 

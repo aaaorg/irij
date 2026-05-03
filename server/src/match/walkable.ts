@@ -8,14 +8,17 @@
 // Per docs/02c sekce "Walkable mask": per-tile bool, generuje se z combined kolizí
 // terrain + objects (zatím jen terrain, objects layer přijde v Phase 18).
 //
-// **Goja constraint:** Nakama JS runtime serializuje match state mezi callbacks.
-// Class instances (s metodami) by ztratily prototype, takže WalkableMask je čistá
-// **data** (plain object) + module-level **funkce** (isInBounds/isWalkable/...).
-// Uint8Array uvnitř chunků je serializable — Goja JSON ho enkóduje jako pole bytů.
-// (Pokud by se ukázalo, že array → Uint8Array round-trip není stable, switchneme
-// na regular number[]; pro 50×50 mapu paměť triviální.)
+// **Goja constraint:** Nakama JS runtime mezi handler voláními Export()-uje state
+// do Go `map[string]interface{}` a rekonstruuje fresh Goja objekty přes
+// `stateObject.Set(k, v)` (viz runtime_javascript_match_core.go). Class instances
+// by ztratily prototype, takže WalkableMask je čistá **data** (plain object) +
+// module-level **funkce** (isInBounds/isWalkable/...). Pro stejný důvod
+// používáme `number[]` místo `Uint8Array` — typed array round-trip přes Go map
+// není zaručeně stabilní napříč callbacks.
 //
-// Storage volba: 1 byte per tile (ne bit-packed). Důvod: jednoduchost. 50×50 = 2.5 KB.
+// Storage volba: 1 byte per tile v plain `number[]` (ne bit-packed). Důvod:
+// jednoduchost + Goja-friendly. Per-chunk 64×64 = 4096 entries; 50×50 mapa
+// se vejde do jediného chunku (4096 entries, ~few KB v JS heap, triviální).
 
 import { CHUNK_SIZE_TILES, NON_WALKABLE_TILE_GIDS } from 'irij-shared/constants';
 import type { Position } from 'irij-shared/types';
@@ -134,7 +137,8 @@ export function nearestWalkable(
       if (visited[k]) continue;
       visited[k] = true;
       // BFS pokračuje i přes non-walkable, ale mimo bounds zastaví.
-      if (n.x < -1 || n.y < -1 || n.x > mask.width || n.y > mask.height) continue;
+      // Validní tile range pro mapu width×height je [0, width-1] × [0, height-1].
+      if (n.x < 0 || n.y < 0 || n.x >= mask.width || n.y >= mask.height) continue;
       queue.push({ x: n.x, y: n.y, d: node.d + 1 });
     }
   }

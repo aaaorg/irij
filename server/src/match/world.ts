@@ -34,6 +34,7 @@ import {
   type PlayerPresenceState,
   type WorldMatchState,
 } from './state.js';
+import { advanceMovement, broadcastMoveRejected, handleMoveRequest } from './movement.js';
 import { countWalkable, maskFromTiledMap } from './walkable.js';
 
 export function matchInit(
@@ -53,6 +54,7 @@ export function matchInit(
     walkable,
     presencesByUserId: {},
     presencesByChunk: {},
+    moveRequestLog: {},
   };
   return {
     state,
@@ -118,6 +120,11 @@ export function matchJoin(
       hpMax,
       lastChunk,
       joinedAt: Date.now(),
+      // 4b: žádný aktivní path při join (hráč se spawnuje statický).
+      path: [],
+      pathStartedAt: 0,
+      pathConsumed: 0,
+      clientSeq: 0,
     };
 
     state.presencesByUserId[userId] = ps;
@@ -198,6 +205,11 @@ export function matchLeave(
 
     removePresenceFromChunk(state, userId, ps.position);
     delete state.presencesByUserId[userId];
+    if (state.moveRequestLog[userId]) {
+      const nextLog = { ...state.moveRequestLog };
+      delete nextLog[userId];
+      state.moveRequestLog = nextLog;
+    }
 
     logger.info(`matchLeave: ${ps.displayName} (${userId.slice(0, 8)}) — cleanup ok`);
   }
@@ -206,18 +218,46 @@ export function matchLeave(
 
 export function matchLoop(
   _ctx: nkruntime.Context,
-  _logger: nkruntime.Logger,
+  logger: nkruntime.Logger,
   _nk: nkruntime.Nakama,
-  _dispatcher: nkruntime.MatchDispatcher,
-  _tick: number,
+  dispatcher: nkruntime.MatchDispatcher,
+  tick: number,
   state: WorldMatchState,
-  _messages: nkruntime.MatchMessage[],
+  messages: nkruntime.MatchMessage[],
 ): { state: WorldMatchState } {
-  state.tick++;
-  // TODO Phase 4b: process MOVE_REQUEST messages (validate + A* pathfind on
-  // state.walkable), advance paths tile-by-tile, broadcast ENTITY_MOVED to
-  // 3×3 chunkové okolí. Combat tick (Phase 6), AI tick (Phase 6), autosave
-  // (Phase 5) přijdou jako counters proti master 10 Hz tick.
+  state.tick = tick;
+
+  // 1) Zpracuj příchozí zprávy. V 4b jen Op.MOVE_REQUEST; další opcodes (combat
+  //    request, attack, gather, ...) přijdou v Phase 6+.
+  for (const msg of messages) {
+    if (msg.opCode === Op.MOVE_REQUEST) {
+      // nakama-common typuje msg.data jako ArrayBuffer, ale Goja runtime ji
+      // skutečně doručuje jako string (klient posílá JSON.stringify(...)).
+      // Held-nose double-cast přes unknown — pokud by někdy začal chodit
+      // ArrayBuffer, defenzivně dekódujeme.
+      const raw = msg.data as unknown;
+      let text: string;
+      if (typeof raw === 'string') {
+        text = raw;
+      } else {
+        const bytes = new Uint8Array(raw as ArrayBuffer);
+        let s = '';
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
+        text = s;
+      }
+      const result = handleMoveRequest(state, logger, msg.sender, text, tick);
+      if (!result.ok && result.reason) {
+        broadcastMoveRejected(dispatcher, msg.sender, result.reason, result.clientSeq);
+      }
+    }
+    // Ostatní opcodes ignoruje 4b — server logger.debug by zaplevelilo log.
+  }
+
+  // 2) Advance positions po path při MOVEMENT_SPEED_TPS_BASE, broadcast
+  //    ENTITY_MOVED na tile boundary. Combat tick (Phase 6), AI tick (Phase 6),
+  //    autosave (Phase 5) přijdou jako counters proti master 10 Hz tick.
+  advanceMovement(state, dispatcher, tick);
+
   return { state };
 }
 
@@ -225,12 +265,30 @@ export function matchTerminate(
   _ctx: nkruntime.Context,
   logger: nkruntime.Logger,
   _nk: nkruntime.Nakama,
-  _dispatcher: nkruntime.MatchDispatcher,
+  dispatcher: nkruntime.MatchDispatcher,
   _tick: number,
   state: WorldMatchState,
   _graceSeconds: number,
 ): { state: WorldMatchState } {
-  logger.info(`Match terminating; ${Object.keys(state.presencesByUserId).length} presences in state`);
+  const userIds = Object.keys(state.presencesByUserId);
+  logger.info(`Match terminating; ${userIds.length} presences in state — broadcasting despawns`);
+
+  // Phase 5 doplní autosave Player blobu do Storage před despawnem (current_position,
+  // last_logout_at, atd.). Pro 4b jen oznámíme klientům despawn, aby si vyčistili
+  // sprite cache místo "duch" zůstávajícího v okolí.
+  for (const userId of userIds) {
+    const ps = state.presencesByUserId[userId];
+    if (!ps) continue;
+    const despawnPayload: EntityDespawned = { entity_id: userId };
+    broadcastToChunkArea(
+      dispatcher,
+      state,
+      ps.lastChunk,
+      Op.ENTITY_DESPAWNED,
+      despawnPayload,
+      userId,
+    );
+  }
   return { state };
 }
 

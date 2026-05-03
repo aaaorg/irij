@@ -5,6 +5,7 @@ export const Op = {
   MOVE_REQUEST: 1,
   ENTITY_MOVED: 2,
   WORLD_SNAPSHOT: 3,
+  MOVE_REJECTED: 4,
 
   // Combat (10-19)
   ATTACK_REQUEST: 10,

@@ -61,6 +61,7 @@ export const Op = {
   MOVE_REQUEST: 1,
   ENTITY_MOVED: 2,
   WORLD_SNAPSHOT: 3,
+  MOVE_REJECTED: 4,
 
   // Combat (10-19)
   ATTACK_REQUEST: 10,
@@ -216,6 +217,19 @@ Změna `display_name`, deduct denáry, cooldown.
 **Payload:** `{ tick, entities: [{ id, type, position, hp_pct, ... }], objects, drops }`.
 **Frekvence:** 1 Hz "keepalive snapshot" + on-demand při entry do nové oblasti.
 **Použití:** klient resync po lag spike, post-load full state.
+
+### `MOVE_REJECTED` (server → klient sender)
+**Payload:** `{ reason: 'malformed' | 'rate_limited' | 'stunned' | 'out_of_bounds' | 'no_path' | 'too_far', client_seq: number }`.
+**Doručení:** unicast (jen sender), žádný broadcast okolí.
+**Reason enum:**
+- `malformed` — payload nelze JSON.parse, chybí pole, špatné typy. Ochrana proti vadným klientům.
+- `rate_limited` — překročen 10 req/s sliding window per userId.
+- `stunned` — hráč má status effect blokující movement (4b: stub, Phase 6+ implementuje).
+- `out_of_bounds` — `target.{x,y}` mimo dimenze walkable mask. Anti-cheat.
+- `no_path` — target není walkable a v `NEAREST_WALKABLE_BFS_RADIUS` (8) tilů žádný walkable.
+- `too_far` — A* nenajde cestu (unreachable), nebo cesta překročí `MAX_PATH_LENGTH_TILES` (64).
+
+**Klient:** echo `client_seq` umožňuje reconciliation s lokální prediction. 4b klient jen `console.warn`; 4c použije pro snap-back na poslední server-confirmed pozici.
 
 ---
 

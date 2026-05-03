@@ -27,8 +27,8 @@ export const BROADCAST_CHUNK_RADIUS = 1;
 
 // Když klient pošle MOVE_REQUEST na non-walkable tile (např. click na vodu),
 // server si fallbackem najde nejbližší walkable v BFS radius. Konstanta
-// definovaná tady už v 4a, aby v 4b nebyla rozesetá. Hodnota 8 = ~čtvrtina
-// chunku, dostatečná pro UX edge cases.
+// definovaná tady už v 4a, aby v 4b nebyla rozesetá. Hodnota 8 tilů = 1/8
+// chunk (8/64), dostatečná pro UX edge cases bez rizika "snap přes půl mapy".
 export const NEAREST_WALKABLE_BFS_RADIUS = 8;
 
 // World scaling
