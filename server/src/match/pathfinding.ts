@@ -1,15 +1,31 @@
 // A* pathfinding nad WalkableMask — viz docs/03-message-katalog.md (MOVE_REQUEST)
-// a docs/02c-data-model-svet.md (Walkable mask).
+// a docs/02c-data-model-svet.md (Walkable mask), ADR-020 (8-directional movement).
 //
 // Konvence:
-//   - 4-směrová (N/S/E/W), žádné diagonály. Důvod: matchne iso aesthetic +
-//     zjednodušuje range validaci pro budoucí combat (manhattan = grid distance).
-//   - Manhattan heuristika (admissible pro 4-conn grid s uniform cost).
-//   - Binary min-heap pro open set (sort() v hot loopu by byl O(n log n) per push;
-//     heap je O(log n)). Pro 50×50 mapu detail nezáleží, ale post-MVP 256×256+
-//     to přestane být zanedbatelné.
-//   - Bounded: closedSet cap (anti-DoS, pokud target unreachable v obrovské mapě)
-//     + maxPathLength cap (anti-teleport: hráč nemůže poslat target za roh světa).
+//   - **8-směrová** (4 cardinal N/S/E/W + 4 diagonal NE/NW/SE/SW). Cardinal step
+//     cost = 1, diagonal cost = √2 (octile). Důvod: přirozenější pohyb v iso
+//     gridu, kratší cesty (Chebyshev distance místo Manhattan), lepší UX při
+//     click-to-move přes volnou plochu.
+//   - **Octile heuristika** `max(|dx|,|dy|) + (√2-1)·min(|dx|,|dy|)` — admissible
+//     pro 8-conn grid s octile costs.
+//   - **No corner cutting:** diagonální krok mezi (x,y) a (x+dx,y+dy) je povolen
+//     jen pokud jsou (x+dx,y) i (x,y+dy) walkable. Bez toho by sprite "pronikal
+//     rohem" mezi dvě non-walkable dlaždice (např. dvě stěny v L-tvaru), což
+//     vypadá jako bug a komplikuje budoucí collision/range validaci.
+//   - **Diagonal-first expansion:** v sousedním poli sloupkujeme diagonály před
+//     cardinaly, takže při tie-breaku f-hodnoty A* preferuje diagonální postup
+//     před zubatým střídáním cardinal/cardinal — výsledné cesty vypadají
+//     "rovnější".
+//   - **Step count vs cost:** `g` drží octile cost (float), ale samostatný
+//     `steps` counter drží počet kroků v cestě — `MAX_PATH_LENGTH_TILES` cap se
+//     vztahuje k step countu (= path.length), ne k cost. Tím zůstává smysl
+//     konstanty stabilní bez ohledu na zastoupení diagonál.
+//   - **Bounded:** closedSet cap (anti-DoS pro unreachable target v obrovské
+//     mapě) + maxPathLength cap (anti-teleport: hráč nemůže poslat target za
+//     roh světa).
+//   - **Binary min-heap** pro open set (sort() v hot loopu by byl O(n log n)
+//     per push; heap je O(log n)). Pro 50×50 mapu detail nezáleží, ale post-MVP
+//     256×256+ to přestane být zanedbatelné.
 //
 // API: pure function, žádný Nakama runtime dependency. Snadno mockuvatelné kdyby
 // někdy vznikl test runner.
@@ -20,11 +36,14 @@ import { isInBounds, isWalkable, type WalkableMask } from './walkable.js';
 const DEFAULT_MAX_NODES = 4096;
 const DEFAULT_MAX_PATH_LENGTH = 64;
 
+const SQRT2 = Math.SQRT2;
+
 interface PathNode {
   x: number;
   y: number;
-  g: number; // cost from start
+  g: number; // octile cost from start (cardinal=1, diagonal=√2)
   f: number; // g + h (priority)
+  steps: number; // počet kroků v cestě (pro maxPathLength cap)
   parent: PathNode | null;
 }
 
@@ -92,13 +111,32 @@ class MinHeap {
   }
 }
 
-function manhattan(ax: number, ay: number, bx: number, by: number): number {
-  return Math.abs(ax - bx) + Math.abs(ay - by);
+// Octile distance: admissible heuristika pro 8-conn grid s costs (1, √2).
+// Forma `(dx+dy) + (√2 - 2) * min(dx,dy)` je ekvivalentní `max + (√2-1)*min`,
+// jen méně podmínek.
+function octile(ax: number, ay: number, bx: number, by: number): number {
+  const dx = Math.abs(ax - bx);
+  const dy = Math.abs(ay - by);
+  return dx + dy + (SQRT2 - 2) * Math.min(dx, dy);
 }
 
 function keyOf(x: number, y: number): string {
   return `${x},${y}`;
 }
+
+// 8-směrové sousedí. Diagonály (dx≠0 ∧ dy≠0) jsou vyjmenované první — při tie
+// breaku f-hodnoty A* expanduje diagonální node dřív než cardinal, což produkuje
+// vizuálně přímější cesty v otevřeném prostoru (méně "schodišťování").
+const NEIGHBOR_OFFSETS: Array<[number, number]> = [
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
 
 export interface FindPathOptions {
   maxNodes?: number;
@@ -137,18 +175,12 @@ export function findPath(
     x: from.x,
     y: from.y,
     g: 0,
-    f: manhattan(from.x, from.y, to.x, to.y),
+    f: octile(from.x, from.y, to.x, to.y),
+    steps: 0,
     parent: null,
   };
   open.push(startNode);
   bestG[keyOf(from.x, from.y)] = 0;
-
-  const dirs: Array<[number, number]> = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ];
 
   let expanded = 0;
 
@@ -161,8 +193,9 @@ export function findPath(
     if (expanded > maxNodes) return null;
 
     if (cur.x === to.x && cur.y === to.y) {
-      // Reconstruct path. Length = cur.g; if too long, reject.
-      if (cur.g > maxPathLength) return null;
+      // Reconstruct path. Step count je v `cur.steps`; cap už checknutý při
+      // expansion, ale double-check defenzivně.
+      if (cur.steps > maxPathLength) return null;
       const out: Position[] = [];
       let n: PathNode | null = cur;
       while (n && n.parent) {
@@ -173,16 +206,28 @@ export function findPath(
       return out;
     }
 
-    for (const [dx, dy] of dirs) {
+    for (const [dx, dy] of NEIGHBOR_OFFSETS) {
       const nx = cur.x + dx;
       const ny = cur.y + dy;
       if (!isInBounds(walkable, nx, ny)) continue;
       if (!isWalkable(walkable, nx, ny)) continue;
+      // No corner cutting: diagonální krok přes (cur.x+dx, cur.y) AND
+      // (cur.x, cur.y+dy) musí být oba walkable. Bez toho by se sprite
+      // "protlačil" mezi dvě stěny v L-rohu — vypadá to jako bug a komplikuje
+      // budoucí collision (kdyby přibyly tile-edge bariéry, zachová se invariant
+      // "step prochází přes nelinii non-walkable bloku").
+      const diagonal = dx !== 0 && dy !== 0;
+      if (diagonal) {
+        if (!isWalkable(walkable, cur.x + dx, cur.y)) continue;
+        if (!isWalkable(walkable, cur.x, cur.y + dy)) continue;
+      }
       const nk = keyOf(nx, ny);
       if (closed[nk]) continue;
-      const ng = cur.g + 1;
-      // Early prune: if path would exceed max even with zero remaining, skip.
-      if (ng > maxPathLength) continue;
+      const stepCost = diagonal ? SQRT2 : 1;
+      const ng = cur.g + stepCost;
+      const nsteps = cur.steps + 1;
+      // Early prune: cesta delší než cap → skip (anti-teleport target za roh světa).
+      if (nsteps > maxPathLength) continue;
       const prevBest = bestG[nk];
       if (prevBest !== undefined && ng >= prevBest) continue;
       bestG[nk] = ng;
@@ -190,7 +235,8 @@ export function findPath(
         x: nx,
         y: ny,
         g: ng,
-        f: ng + manhattan(nx, ny, to.x, to.y),
+        f: ng + octile(nx, ny, to.x, to.y),
+        steps: nsteps,
         parent: cur,
       });
     }
