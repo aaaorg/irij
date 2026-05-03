@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Irij** — browser MMORPG ve světě slovanského folklóru. Tick-based, 2D pixel art, **isometrický pohled** (2:1 dimetric, viz [docs/04 ADR-018](docs/04-tech-adr.md#adr-018-isometric-rendering--explicitní-engineering-kontrakt)). Phaser klient + Nakama server, sólo dev s AI asistencí. Cíl: ~100 CCU, EU latence, self-hostable.
 
-**Stav:** Phase 0 ✓ (lokální stack běží), Phase 1 ✓ (guest auth + Boot → Login → World scene flow). Další: **Phase 2** (character creation) nebo **Phase 3** (statická isometric mapa) — viz [docs/00-action-plan.md](docs/00-action-plan.md). Match handler, většina RPC a render pipeline jsou stále TODO scaffolding.
+**Stav:** Phase 0 ✓ (lokální stack běží), Phase 1 ✓ (guest auth + Boot → Login → World scene flow), Phase 2 ✓ (character creation — `rpc.profile.create_character` + `rpc.profile.get_self`, validace, init Player/Skills/Inventory blobů, klient CharacterCreationScene). Další: **Phase 3** (statická isometric mapa) — viz [docs/00-action-plan.md](docs/00-action-plan.md). Match handler, většina RPC a render pipeline jsou stále TODO scaffolding.
 
 **Render konvence:** logický grid je ortogonální `(x, y)` v tiles — server, pathfinding, collision pracují čistě ve world-space. Isometric je čistě klient render projection (2:1 dimetric, screen footprint 64×32 px, projekce v `client/src/render/projection.ts`, Y-sort depth helper v `client/src/render/ysort.ts` — viz ADR-018). Žádný server kód nesmí pracovat s pixel/screen souřadnicemi.
 
@@ -17,7 +17,7 @@ Monorepo (pnpm workspaces) — tři balíčky a sdílené moduly:
 - [client/](client/) — Phaser 3 + Vite + TypeScript klient, importuje `irij-shared`
 - [server/](server/) — Nakama TypeScript runtime modul, esbuild bundle do IIFE
 - [shared/](shared/) — sdílené types, opcodes, constants. Re-exporty: `irij-shared`, `irij-shared/types`, `irij-shared/messages`, `irij-shared/constants`. Používá `"main": "./src/index.ts"` (žádný build, konzumenti čtou TS přímo)
-- [infra/](infra/) — `docker-compose.yml` (Postgres 16 + Nakama 3.24) a `nakama/local.yml`
+- [infra/](infra/) — `docker-compose.yml` (Postgres 16 + Nakama 3.38) a `nakama/local.yml`
 - [migrations/](migrations/) — SQL migrace (golang-migrate, zatím prázdné)
 - [docs/](docs/) — designové dokumenty 00–04 a `refs/`. **Vždy je čti, než budeš dělat netriviální změny** — definují data model, message katalog a tech ADRs
 
