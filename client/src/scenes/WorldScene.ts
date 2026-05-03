@@ -1,5 +1,10 @@
 import Phaser from 'phaser';
-import type { FindOrCreateMatchResponse } from 'irij-shared/messages';
+import type {
+  EntityMoved,
+  FindOrCreateMatchResponse,
+  MoveRejected,
+} from 'irij-shared/messages';
+import { Op } from 'irij-shared/messages';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, worldToScreen } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -87,10 +92,30 @@ export class WorldScene extends Phaser.Scene {
     // matchJoin handleru, takže handler musí být registrovaný předtím, než
     // server potvrdí join.
     conn.socket.onmatchdata = (md) => {
-      // TODO Phase 4c: route by op_code (Op.ENTITY_SPAWNED → render sprite,
-      // Op.ENTITY_MOVED → interpolation, Op.WORLD_SNAPSHOT → bulk hydrate, ...).
+      // 4b: log all match data, decode known opcodes pro debug. 4c udělá real
+      // routing (sprite spawn/move/despawn, interpolation, snapshot hydrate).
       const senderId = md.presence?.user_id ?? 'server';
       console.log(`[match] op=${md.op_code} from=${senderId} bytes=${md.data.length}`);
+      try {
+        // Nakama-js doručuje md.data jako Uint8Array; dekódujeme na string.
+        const text =
+          typeof md.data === 'string'
+            ? md.data
+            : new TextDecoder().decode(md.data as unknown as ArrayBuffer);
+        if (md.op_code === Op.ENTITY_MOVED) {
+          const moved = JSON.parse(text) as EntityMoved;
+          console.log(
+            `[match ENTITY_MOVED] entity=${moved.entity_id.slice(0, 8)} from=(${moved.from.x},${moved.from.y}) to=(${moved.to.x},${moved.to.y}) tick=${moved.server_tick}`,
+          );
+        } else if (md.op_code === Op.MOVE_REJECTED) {
+          const rejected = JSON.parse(text) as MoveRejected;
+          console.warn(
+            `[match MOVE_REJECTED] reason=${rejected.reason} client_seq=${rejected.client_seq}`,
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to decode match data', err);
+      }
     };
     conn.socket.onmatchpresence = (mp) => {
       const joinIds = (mp.joins ?? []).map((p) => p.user_id ?? p.username);
