@@ -9,6 +9,7 @@ import type {
   WorldSnapshotEntity,
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
+import type { Position } from 'irij-shared/types';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, screenToTile, worldToScreen } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -27,17 +28,23 @@ const CHARACTER_KEY = 'characterPlaceholder';
 // switching podle azimutu) přijde v Phase 6+ s polish sprite anims.
 const FRAME_FACING_SE = 0;
 
-// Délka tween mezi dvěma tile updaty. Server posílá ENTITY_MOVED tile-by-tile
-// při ~3 tiles/s (ADR-007: TICK_HZ=10, MOVE_TICK_INTERVAL ≈ 3 → každých 333 ms).
-// 100 ms lerp skončí dlouho před dalším updatem; kdyby server burstnul víc
-// updates rychleji než 100 ms, killTweensOf v handleru přepíše předchozí tween.
-const MOVE_TWEEN_MS = 100;
-
 // Hrubý HUD click-shield: HUD label je v levém horním rohu (12, 12) s padding,
 // celkově nepřesáhne ~30 px výšky a ~200 px šířky pro rozumný display_name.
 // Pro Phase 4c stačí; Phase 17 polish bude mít proper hit-region/depth picking.
 const HUD_GUARD_W = 200;
 const HUD_GUARD_H = 30;
+
+// Deterministic interpolation state per entity (per ADR-019). Klient drží
+// path baseline ze serveru a každý frame v `update()` přepočítá sprite pozici
+// z `Date.now() - startedAtMs`. Self-correcting: tab v pozadí zastaví Phaser
+// scene, ale `Date.now()` běží dál — po tab return update() recomputuje pozici
+// z wall-clock baseline a sprite plynule (nebo skokem) chytí server-current.
+interface EntityMovementState {
+  from: Position;
+  path: Position[];
+  speedTps: number;
+  startedAtMs: number;
+}
 
 export class WorldScene extends Phaser.Scene {
   private player?: Phaser.GameObjects.Sprite;
@@ -45,6 +52,7 @@ export class WorldScene extends Phaser.Scene {
   private connRef?: NakamaConnection;
   private selfUserId?: string;
   private otherPlayers: Map<string, Phaser.GameObjects.Sprite> = new Map();
+  private entityMoveStates: Map<string, EntityMovementState> = new Map();
   private clientSeq = 0;
   private rejectToast?: Phaser.GameObjects.Text;
 
@@ -90,8 +98,11 @@ export class WorldScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
 
     // Phase 4c: click-to-move + dispatch table na onmatchdata. Server-authoritative
-    // movement; klient nepredikuje, jen posílá MOVE_REQUEST a tweenuje na ENTITY_MOVED.
+    // movement; klient nepredikuje, jen posílá MOVE_REQUEST a deterministic-ky
+    // lerpuje per ADR-019. Server posílá ENTITY_MOVED 1× s celou path, klient
+    // udržuje wall-clock baseline a v update() recomputuje sprite pozici every frame.
     // TODO post-MVP: client-side prediction + reconciliation pro skrytí ~50 ms latence.
+    // TODO post-MVP: 1 Hz WORLD_SNAPSHOT keepalive proti server clock drift.
     this.joinWorldMatch(conn).catch((err) => {
       console.error('joinWorldMatch failed', err);
     });
@@ -168,6 +179,17 @@ export class WorldScene extends Phaser.Scene {
     if (!snapshot || !Array.isArray(snapshot.entities)) return;
     for (const entity of snapshot.entities) {
       this.spawnRemotePlayerIfNeeded(entity);
+      // Per ADR-019: pokud entity je uprostřed pohybu, server pošle path
+      // suffix v snapshotu. Po spawnu sprite hned spustíme TweenChain, takže
+      // joiner vidí ostatní v plynulém pohybu.
+      if (
+        entity.id !== this.selfUserId &&
+        entity.path &&
+        entity.path.length > 0 &&
+        entity.speed_tps !== undefined
+      ) {
+        this.startEntityMovement(entity.id, entity.position, entity.path, entity.speed_tps);
+      }
     }
   }
 
@@ -188,42 +210,116 @@ export class WorldScene extends Phaser.Scene {
     if (!payload?.entity_id) return;
     const sprite = this.otherPlayers.get(payload.entity_id);
     if (!sprite) return;
+    this.entityMoveStates.delete(payload.entity_id);
     this.tweens.killTweensOf(sprite);
     sprite.destroy();
     this.otherPlayers.delete(payload.entity_id);
   }
 
   private handleEntityMoved(payload: EntityMoved): void {
-    if (!payload?.entity_id || !payload.to) return;
+    if (!payload?.entity_id || !payload.from || !Array.isArray(payload.path)) return;
+    if (payload.path.length === 0) return;
+    if (typeof payload.speed_tps !== 'number' || payload.speed_tps <= 0) return;
 
-    const sprite =
-      payload.entity_id === this.selfUserId ? this.player : this.otherPlayers.get(payload.entity_id);
-    if (!sprite) {
-      // Race: ENTITY_MOVED před ENTITY_SPAWNED. Server by měl posílat v pořadí,
-      // ale defensive — neaplikujeme, ENTITY_SPAWNED později vytvoří sprite na
-      // aktuální pozici.
+    // Sprite check je defensive — pokud chybí (race s ENTITY_SPAWNED), uložíme
+    // state stejně, update() ho ignoruje a smaže až přijde ENTITY_SPAWNED. Tj.
+    // pre-spawn ENTITY_MOVED se ztratí, ale to je akceptovatelné — server posílá
+    // ENTITY_SPAWNED s aktuální pozicí.
+    const hasSprite =
+      payload.entity_id === this.selfUserId
+        ? !!this.player
+        : this.otherPlayers.has(payload.entity_id);
+    if (!hasSprite) {
       console.warn(`[match ENTITY_MOVED] sprite not found for ${payload.entity_id.slice(0, 8)}`);
       return;
     }
 
-    const { sx, sy } = worldToScreen(payload.to.x, payload.to.y);
-    const targetPx = sx + TILE_W_PX / 2;
-    const targetPy = sy + TILE_H_PX / 2;
+    this.startEntityMovement(payload.entity_id, payload.from, payload.path, payload.speed_tps);
+  }
 
-    // Depth musí reflektovat budoucí pozici hned, jinak Y-sort flickeruje
-    // během tween (sprite by zůstal v depth-band z `from` zatímco se pohybuje
-    // do `to`).
-    sprite.setDepth(depthForDynamic(payload.to.y));
-
-    // Killni případný předchozí tween — burst updates by jinak hazardily.
-    this.tweens.killTweensOf(sprite);
-    this.tweens.add({
-      targets: sprite,
-      x: targetPx,
-      y: targetPy,
-      duration: MOVE_TWEEN_MS,
-      ease: 'Linear',
+  // Sdílený pipeline pro WORLD_SNAPSHOT in-flight entries i ENTITY_MOVED:
+  // ulož deterministic baseline state (path + startedAtMs); update() loop
+  // přepočítá sprite pozici every frame z `Date.now() - startedAtMs`. Žádný
+  // Phaser tween — rAF v hidden tabu pause-uje a způsobil by drift od serveru.
+  // Per ADR-019.
+  private startEntityMovement(
+    entityId: string,
+    from: Position,
+    path: Position[],
+    speedTps: number,
+  ): void {
+    if (path.length === 0) return;
+    this.entityMoveStates.set(entityId, {
+      from: { x: from.x, y: from.y },
+      path: path.map((p) => ({ x: p.x, y: p.y })),
+      speedTps,
+      startedAtMs: Date.now(),
     });
+  }
+
+  // Phaser scene update — zavolán každý frame. Itereuje aktivní movement states
+  // a deterministic-ky vypočítá sprite pozici z wall-clock elapsed. Self-correcting:
+  // - Hidden tab → Phaser pause → update neběží → sprite stojí. Date.now() přitom
+  //   roste, takže po tab return první update spočítá `tilesElapsed` z plného
+  //   uplynulého času a sprite chytí current correct pozici (snap nebo path-end).
+  // - Drift od serveru se korriguje při každém ENTITY_MOVED — server pošle nový
+  //   `from` (= current server position), klient přepíše state, sprite od příští
+  //   frame jede z nové baseline.
+  override update(_time: number, _delta: number): void {
+    if (this.entityMoveStates.size === 0) return;
+    const now = Date.now();
+    const completed: string[] = [];
+
+    for (const [entityId, state] of this.entityMoveStates) {
+      const sprite =
+        entityId === this.selfUserId ? this.player : this.otherPlayers.get(entityId);
+      if (!sprite) {
+        completed.push(entityId);
+        continue;
+      }
+
+      const elapsedMs = now - state.startedAtMs;
+      const tilesElapsed = (elapsedMs * state.speedTps) / 1000;
+
+      if (tilesElapsed >= state.path.length) {
+        // Path doběhl — snap na poslední tile, vyčisti state.
+        const last = state.path[state.path.length - 1];
+        if (last) {
+          const px = this.tileCenterPx(last);
+          sprite.setPosition(px.x, px.y);
+          sprite.setDepth(depthForDynamic(last.y));
+        }
+        completed.push(entityId);
+        continue;
+      }
+
+      const idx = Math.floor(Math.max(0, tilesElapsed));
+      const subTile = tilesElapsed - idx;
+      const startTile = idx === 0 ? state.from : (state.path[idx - 1] ?? state.from);
+      const endTile = state.path[idx];
+      if (!endTile) {
+        completed.push(entityId);
+        continue;
+      }
+
+      const startPx = this.tileCenterPx(startTile);
+      const endPx = this.tileCenterPx(endTile);
+      const x = startPx.x + (endPx.x - startPx.x) * subTile;
+      const y = startPx.y + (endPx.y - startPx.y) * subTile;
+      const lerpedY = startTile.y + (endTile.y - startTile.y) * subTile;
+
+      sprite.setPosition(x, y);
+      sprite.setDepth(depthForDynamic(lerpedY));
+    }
+
+    for (const id of completed) {
+      this.entityMoveStates.delete(id);
+    }
+  }
+
+  private tileCenterPx(tile: Position): { x: number; y: number } {
+    const { sx, sy } = worldToScreen(tile.x, tile.y);
+    return { x: sx + TILE_W_PX / 2, y: sy + TILE_H_PX / 2 };
   }
 
   private handleMoveRejected(payload: MoveRejected): void {
@@ -243,12 +339,10 @@ export class WorldScene extends Phaser.Scene {
     if (this.otherPlayers.has(entity.id)) return; // re-snapshot / duplicate spawn
 
     const { x, y } = entity.position;
-    const { sx, sy } = worldToScreen(x, y);
-    const px = sx + TILE_W_PX / 2;
-    const py = sy + TILE_H_PX / 2;
+    const center = this.tileCenterPx({ x, y });
 
     const sprite = this.add
-      .sprite(px, py, CHARACTER_KEY, FRAME_FACING_SE)
+      .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
       .setOrigin(0.5, 1)
       .setDepth(depthForDynamic(y));
     if (entity.display_name) sprite.setData('displayName', entity.display_name);
@@ -340,15 +434,12 @@ export class WorldScene extends Phaser.Scene {
 
   private spawnPlayer(profile: PlayerProfile): void {
     const { x, y } = profile.player.current_position;
-    const { sx, sy } = worldToScreen(x, y);
+    const center = this.tileCenterPx({ x, y });
     // Phaser ISOMETRIC tilemap renderuje tile (x,y) tak, že bounding box top-left
     // je na worldToScreen(x,y). Diamond center = +TW/2 vodorovně, +TH/2 svisle.
     // Sprite s origin (0.5, 1) → feet anchor sedí v diamond centru.
-    const px = sx + TILE_W_PX / 2;
-    const py = sy + TILE_H_PX / 2;
-
     this.player = this.add
-      .sprite(px, py, CHARACTER_KEY, FRAME_FACING_SE)
+      .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
       .setOrigin(0.5, 1)
       .setDepth(depthForDynamic(y));
 
@@ -377,8 +468,10 @@ export class WorldScene extends Phaser.Scene {
     this.scale.off('resize', this.onResize, this);
     this.input.off('pointerdown', this.handlePointerDown, this);
 
-    // Cleanup ostatní hráče. tweens.killAll() vyřeší case s aktivním lerp.
+    // Cleanup ostatní hráče + UI tweens (toast fadeOut atd.). Movement state
+    // je čistě data, žádné tweens pro pohyb (deterministic update loop per ADR-019).
     this.tweens.killAll();
+    this.entityMoveStates.clear();
     for (const sprite of this.otherPlayers.values()) {
       sprite.destroy();
     }

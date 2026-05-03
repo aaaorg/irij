@@ -180,7 +180,7 @@
 
 | Tick / Event                       | Frekvence            | Poznámka                                      |
 | ---------------------------------- | -------------------- | --------------------------------------------- |
-| Movement broadcast                 | 10 Hz (100 ms)       | Server pošle "kde kdo je"                     |
+| Movement broadcast                 | 1× per MOVE_REQUEST acceptance (path-based) | Server pošle celou path; klient lokálně lerpuje plynule. Viz [ADR-019](#adr-019-entity_moved--path-based-broadcast-runescapetibia-model). |
 | Combat tick                        | 3 Hz (~330 ms)       | Server resolves útoky/spelly                  |
 | AI tick (mobs, workers)            | 2 Hz (500 ms)        | Mob behavior, worker progress                 |
 | Resource respawn check             | 0.067 Hz (15 s)      | Mining nodes, herbs                           |
@@ -588,6 +588,41 @@ Phase 0 + 1 jsou nedotčené (pure connect, žádný render). Náklady jsou tedy
 
 ---
 
+## ADR-019: ENTITY_MOVED = path-based broadcast (RuneScape/Tibia model)
+
+**Status:** Accepted (2026-05-03)
+
+**Kontext:** Phase 4b implementoval movement protokol s per-tile-boundary `ENTITY_MOVED` broadcast — server v `matchLoop` posílal zprávu pokaždé, když hráč překročil tile (~333 ms při 3 tps). Klient v 4c tween-oval na 100 ms. Jenže server ticky jsou diskrétní (10 Hz, advance přes `floor((tick - pathStartedAt) * speed / TICK_HZ)`), takže reálný interval kolísal 300–400 ms; klient tween skončil v 100 ms a sprite stál až 300 ms — uživatel reportoval „1 → 2, pauza, 2 → 3, pauza".
+
+**Rozhodnutí:** Server posílá `ENTITY_MOVED` **JEDNOU** po validaci `MOVE_REQUEST` s celou path (`from + path[]`). Klient drží `EntityMovementState { from, path, speedTps, startedAtMs }` per entity a v Phaser scene `update()` callback **každý frame** přepočítá sprite pozici z deterministic formule `tilesElapsed = (Date.now() - startedAtMs) * speedTps / 1000`. Žádné Phaser tweens pro pohyb — `requestAnimationFrame` v hidden tabu pause-uje a způsobil by drift od serveru. Server stále drží integer tile coords v match state pro chunk index, autosave (Phase 5) a anti-cheat dosah validaci, ale `matchLoop` neposílá per-tile zprávy.
+
+**Klient self-correcting drift recovery:**
+- Hidden tab → Phaser scene pause → `update()` neběží → sprite stojí. `Date.now()` mezitím roste.
+- Tab return → Phaser scene resume → `update()` se zavolá s velkým `elapsedMs` → sprite **automaticky** chytí current correct pozici (snap na last tile pokud `tilesElapsed >= path.length`, jinak lerp na correct sub-tile mid-path).
+- Mid-path interrupt = server pošle nový `ENTITY_MOVED` s `from = currentServerPosition`, klient přepíše state, sprite od příští frame jede z nové baseline.
+- Žádný explicit Page Visibility API handler ani periodic resync — wall-clock baseline + per-frame deterministic compute pokrývá všechny edge cases.
+
+**Důvody:**
+- Přesně to, co dělají RuneScape, Tibia a další click-to-move grid MMOs — single broadcast cesty, klient interpoluje
+- Bandwidth O(1) per move (vs O(N) tilů)
+- Klient zná celou path → plynulý lerp bez jitter ze server tick rounding
+- Path-aware lerp: BFS-fallback ohyb (klik za vodu → server snape na shore + path s ohybem) se klientovi vykreslí korektně po celé cestě, ne straight-line z A do B
+- Mid-path interrupt = re-broadcast nového ENTITY_MOVED s aktuální pozicí jako `from` — natural fit do path-based modelu
+
+**Zvažované alternativy:**
+- **Quake-style 10–20 Hz position snapshot** (float pozice + klient interpolation buffer 100 ms) — odmítnuto: overengineered pro click-to-move grid game bez projektilů a PvP areny, vyžaduje float state na serveru, vyšší bandwidth než path-based
+- **Per-tile broadcast** (původní 4b) — odmítnuto: jitter ze server tick rounding (300–400 ms interval), vyšší bandwidth (O(N) per pohyb), klient pauzy mezi tily
+
+**Důsledky:**
+- Bandwidth O(1) per move
+- Klient plynulý path-aware lerp přes deterministic update-loop, self-correcting proti hidden-tab drift
+- `WORLD_SNAPSHOT` v `matchJoin` zahrnuje in-flight path data (`path?`, `speed_tps?`, `started_at_tick?` na entity entries) → joiner vidí ostatní v plynulém pohybu, ne stojící na current tile dokud se znovu nehnou
+- Interrupt mechanismus (combat stun, change cíle uprostřed pathu) = re-broadcast nového `ENTITY_MOVED` s novou path od aktuální pozice. Combat-driven interrupts přijdou v Phase 6 (mob aggro); MVP scope = jen change cíle (klik někam jinam mid-path)
+- Klient–server clock drift: klient používá `Date.now()` jako baseline, takže ~50 ms network latency mezi server tick a klient receipt znamená klient lerpuje vždy o ~50 ms za serverem. Pro 100 CCU lokální dev zanedbatelné. Post-MVP polish: explicit clock sync přes `SERVER_TICK` opcode (73, momentálně nepoužitý) + 1 Hz `WORLD_SNAPSHOT` keepalive jako fallback proti acumulated drift
+- `ADR-007` tickrate tabulka (řádek „Movement broadcast") aktualizována: per-tick frekvence se mění na „1× per MOVE_REQUEST acceptance"
+
+---
+
 ## ADR-017: Test strategy
 
 **Status:** Proposed
@@ -644,3 +679,5 @@ Tyto se vyřeší při skutečném provisioningu, ne v designu:
 - **2026-05-01** — Draft 1.1: lock TypeScript server, hybrid storage, self-host na existujícím serveru s Cloudflare CDN guidance, OIDC+email+guest auth od MVP, CS+EN lokalizace od MVP. Apple Sign-In flagged jako conditional (iOS plan).
 - **2026-05-02** — Draft 1.2: Apple Sign-In přesunut do post-MVP (čeká na iOS app rozhodnutí). MVP auth: Discord + Google + Email + Guest.
 - **2026-05-03** — Draft 1.3: přidán ADR-018 (isometric rendering — engineering kontrakt). Isometric byl už v scope od 01 Scope a ADR-001, ale chyběla projection/Y-sort/tile-size specifikace a v action planu Phase 3 + CLAUDE.md byl zamíchán top-down placeholder (Kenney Tiny Town). ADR-018 drift fixuje a uzamyká 2:1 dimetric, 64×32 footprint, depth ordering konvenci. Kódový dopad zatím nulový (Phase 0+1 jsou pure connect, žádný render).
+- **2026-05-03** — Draft 1.4: přidán ADR-019 (ENTITY_MOVED = path-based broadcast). Phase 4 follow-up po user-reported trhaném pohybu („1 → 2, pauza, 2 → 3, pauza"); per-tile broadcast (4b) měl jitter 300–400 ms ze server tick rounding. ADR-019 přepíná protokol na single broadcast s celou path (RuneScape/Tibia model), klient lokálně lerpuje plynule. ADR-007 tickrate tabulka updatovaná.
+- **2026-05-03** — Draft 1.5: ADR-019 doplněn o **klient deterministic update-loop** (místo Phaser TweenChain). User-reported drift po alt-tab: Phaser tweens jedou přes `requestAnimationFrame`, browser ho v hidden tabu pause-uje, sprite po návratu do tabu pokračoval od starého stavu místo current server position. Fix: klient drží wall-clock baseline (`Date.now()`) a v scene `update()` každý frame deterministic-ky recomputuje sprite pozici z elapsed × speed_tps. Self-correcting bez Page Visibility API — tab return = první update spočítá correct pozici a sprite skočí/lerpne na ni.

@@ -209,14 +209,15 @@ Změna `display_name`, deduct denáry, cooldown.
 **Response (implicit):** `ENTITY_MOVED` série.
 
 ### `ENTITY_MOVED` (server → klient broadcast)
-**Payload:** `{ entity_id, from, to, speed_tps, server_tick }`.
-**Frekvence:** 10 Hz, jen entity v zorném poli příjemce (3×3 chunky kolem).
-**Klient:** interpolace, vizuální posun.
+**Payload:** `{ entity_id, from, path: [{x,y}, ...], speed_tps, started_at_tick }`.
+**Frekvence:** **1× per MOVE_REQUEST acceptance** (path-based broadcast per [ADR-019](04-tech-adr.md#adr-019-entity_moved--path-based-broadcast-runescapetibia-model)) — ne 10 Hz tile-by-tile. Server pošle celou path; klient lokálně lerpuje plynule per-tile (RuneScape/Tibia model). Mid-path interrupt (klik někam jinam) = re-broadcast s aktuální pozicí jako `from`.
+**Broadcast scope:** entity v 3×3 chunkovém okolí cíle (per ADR-007).
+**Klient:** TweenChain z `path` tilů, per-tile linear lerp `1000 / speed_tps` ms, depth update na začátku každého linku pro Y-sort.
 
 ### `WORLD_SNAPSHOT` (server → klient)
-**Payload:** `{ tick, entities: [{ id, type, position, hp_pct, ... }], objects, drops }`.
-**Frekvence:** 1 Hz "keepalive snapshot" + on-demand při entry do nové oblasti.
-**Použití:** klient resync po lag spike, post-load full state.
+**Payload:** `{ tick, entities: [{ id, type, position, hp_pct, path?, speed_tps?, started_at_tick?, ... }], objects, drops }`.
+**Frekvence:** 1× při matchJoin (joiner-only) + 1 Hz "keepalive snapshot" (post-MVP polish proti drift) + on-demand při entry do nové oblasti.
+**Použití:** klient resync po lag spike, post-load full state, late-join sync. Entity entries mohou obsahovat in-flight path data (`path?`, `speed_tps?`, `started_at_tick?`) — pokud je entity uprostřed pohybu při snapshotu, joiner zrekonstruuje TweenChain a vidí entity v plynulém pohybu, ne stojící na current tile.
 
 ### `MOVE_REJECTED` (server → klient sender)
 **Payload:** `{ reason: 'malformed' | 'rate_limited' | 'stunned' | 'out_of_bounds' | 'no_path' | 'too_far', client_seq: number }`.

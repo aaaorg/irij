@@ -10,6 +10,7 @@
 import {
   DEFAULT_HP,
   DEFAULT_SPAWN_POSITION,
+  MOVEMENT_SPEED_TPS_BASE,
   STORAGE_COLLECTIONS,
   TICK_HZ,
 } from 'irij-shared/constants';
@@ -34,7 +35,12 @@ import {
   type PlayerPresenceState,
   type WorldMatchState,
 } from './state.js';
-import { advanceMovement, broadcastMoveRejected, handleMoveRequest } from './movement.js';
+import {
+  advanceMovement,
+  broadcastMoveRejected,
+  computeCurrentPosition,
+  handleMoveRequest,
+} from './movement.js';
 import { countWalkable, maskFromTiledMap } from './walkable.js';
 
 export function matchInit(
@@ -139,13 +145,47 @@ export function matchJoin(
       if (recipient.userId === userId) continue;
       const other = state.presencesByUserId[recipient.userId];
       if (!other) continue;
-      visibleEntities.push({
+      // Per ADR-019: pokud je entity uprostřed pohybu, vlož current position
+      // (ne stale ps.position) + zbytek path + speed_tps + recomputed start tick
+      // tak, aby joiner zrekonstruoval TweenChain z perspektivy "current sub-path"
+      // a viděl entity v plynulém pohybu, ne stojící na starém tile dokud se
+      // znovu nehne.
+      const inFlight = other.path && other.path.length > 0;
+      const currentPosition = inFlight
+        ? computeCurrentPosition(other, state.tick)
+        : other.position;
+      const entry: WorldSnapshotEntity = {
         id: other.presence.userId,
         type: 'player',
-        position: other.position,
+        position: currentPosition,
         hp_pct: other.hpMax > 0 ? other.hpCurrent / other.hpMax : 1,
         display_name: other.displayName,
-      });
+      };
+      if (inFlight) {
+        // Slice path od aktuální mid-path pozice až po konec původního path.
+        // Server tracká `path` jako "zbytek od posledního advance" (po
+        // matchLoop popnutí), ale computeCurrentPosition může zahrnovat ještě
+        // nepopnuté kroky (tilesAdvanced > pathConsumed). Slice odpovídajícího
+        // suffixu:
+        const ticksElapsed = state.tick - other.pathStartedAt;
+        const tilesShouldHaveMoved = Math.floor(
+          (ticksElapsed * MOVEMENT_SPEED_TPS_BASE) / TICK_HZ,
+        );
+        const totalTilesInPath = other.pathConsumed + other.path.length;
+        const effectiveAdvanced = Math.max(
+          other.pathConsumed,
+          Math.min(tilesShouldHaveMoved, totalTilesInPath),
+        );
+        const offsetWithinPath = effectiveAdvanced - other.pathConsumed;
+        const remainingPath = other.path.slice(offsetWithinPath);
+        if (remainingPath.length > 0) {
+          entry.path = remainingPath;
+          entry.speed_tps = MOVEMENT_SPEED_TPS_BASE;
+          // Z perspektivy joinera: path začíná NYNÍ (state.tick) z currentPosition.
+          entry.started_at_tick = state.tick;
+        }
+      }
+      visibleEntities.push(entry);
     }
     const snapshot: WorldSnapshot = {
       tick: state.tick,
@@ -245,7 +285,7 @@ export function matchLoop(
         for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
         text = s;
       }
-      const result = handleMoveRequest(state, logger, msg.sender, text, tick);
+      const result = handleMoveRequest(state, logger, dispatcher, msg.sender, text, tick);
       if (!result.ok && result.reason) {
         broadcastMoveRejected(dispatcher, msg.sender, result.reason, result.clientSeq);
       }
@@ -253,9 +293,11 @@ export function matchLoop(
     // Ostatní opcodes ignoruje 4b — server logger.debug by zaplevelilo log.
   }
 
-  // 2) Advance positions po path při MOVEMENT_SPEED_TPS_BASE, broadcast
-  //    ENTITY_MOVED na tile boundary. Combat tick (Phase 6), AI tick (Phase 6),
-  //    autosave (Phase 5) přijdou jako counters proti master 10 Hz tick.
+  // 2) Advance server-side position state (chunk index, ps.position) podle
+  //    aktivních paths. ENTITY_MOVED se v tomto loopu NEbroadcastuje — per
+  //    ADR-019 to dělá handleMoveRequest jednou s celou path; klient lokálně
+  //    lerpuje. Combat tick (Phase 6), AI tick (Phase 6), autosave (Phase 5)
+  //    přijdou jako counters proti master 10 Hz tick.
   advanceMovement(state, dispatcher, tick);
 
   return { state };
