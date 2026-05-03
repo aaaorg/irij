@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
+import type { FindOrCreateMatchResponse } from 'irij-shared/messages';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, worldToScreen } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
+import { callRpc } from '../rpc.js';
 import { REGISTRY_KEY_CONNECTION, REGISTRY_KEY_PLAYER, type PlayerProfile } from './LoginScene.js';
 
 const MAP_KEY = 'mapTest';
@@ -16,6 +18,8 @@ const FRAME_FACING_SE = 0;
 
 export class WorldScene extends Phaser.Scene {
   private player?: Phaser.GameObjects.Sprite;
+  private matchId?: string;
+  private connRef?: NakamaConnection;
 
   constructor() {
     super('WorldScene');
@@ -46,6 +50,8 @@ export class WorldScene extends Phaser.Scene {
     this.spawnPlayer(profile);
     this.buildHud(profile);
 
+    this.connRef = conn;
+
     conn.socket.ondisconnect = (evt) => {
       console.warn('Nakama socket disconnected', evt);
       this.scene.start('LoginScene');
@@ -53,6 +59,52 @@ export class WorldScene extends Phaser.Scene {
 
     this.scale.on('resize', this.onResize, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
+
+    // Phase 4a: po render setup zavolej find_or_create_match a joinMatch.
+    // Fire-and-forget — chyba jen logujeme, render nepadá. Movement protokol
+    // (MOVE_REQUEST/ENTITY_MOVED) přijde v Phase 4b, render ostatních hráčů
+    // v Phase 4c. Teď jen subscribneme matchdata/presence a logujeme.
+    this.joinWorldMatch(conn).catch((err) => {
+      console.error('joinWorldMatch failed', err);
+    });
+  }
+
+  private async joinWorldMatch(conn: NakamaConnection): Promise<void> {
+    const response = await callRpc<Record<string, never>, FindOrCreateMatchResponse>(
+      conn,
+      'rpc.world.find_or_create_match',
+      {},
+    );
+    if (!response.ok) {
+      console.error(`find_or_create_match failed: ${response.error}`);
+      return;
+    }
+
+    const { match_id } = response;
+    console.log(`Joining world match ${match_id}`);
+
+    // Subscribe BEFORE joinMatch — Nakama může poslat WORLD_SNAPSHOT během
+    // matchJoin handleru, takže handler musí být registrovaný předtím, než
+    // server potvrdí join.
+    conn.socket.onmatchdata = (md) => {
+      // TODO Phase 4c: route by op_code (Op.ENTITY_SPAWNED → render sprite,
+      // Op.ENTITY_MOVED → interpolation, Op.WORLD_SNAPSHOT → bulk hydrate, ...).
+      const senderId = md.presence?.user_id ?? 'server';
+      console.log(`[match] op=${md.op_code} from=${senderId} bytes=${md.data.length}`);
+    };
+    conn.socket.onmatchpresence = (mp) => {
+      const joinIds = (mp.joins ?? []).map((p) => p.user_id ?? p.username);
+      const leaveIds = (mp.leaves ?? []).map((p) => p.user_id ?? p.username);
+      console.log(`[match presence] joins=${JSON.stringify(joinIds)} leaves=${JSON.stringify(leaveIds)}`);
+    };
+
+    try {
+      const match = await conn.socket.joinMatch(match_id);
+      this.matchId = match.match_id;
+      console.log(`Joined match ${this.matchId} (size=${match.size})`);
+    } catch (err) {
+      console.error('socket.joinMatch failed', err);
+    }
   }
 
   private buildTilemap(): void {
@@ -116,5 +168,17 @@ export class WorldScene extends Phaser.Scene {
   private onShutdown(): void {
     this.scale.off('resize', this.onResize, this);
     this.player = undefined;
+
+    // Best-effort match cleanup. Socket může být disconnected (např. když shutdown
+    // přišel z ondisconnect handleru) → leaveMatch hodí, fire-and-forget.
+    if (this.matchId && this.connRef) {
+      const matchId = this.matchId;
+      const conn = this.connRef;
+      conn.socket.leaveMatch(matchId).catch((err) => {
+        console.warn(`leaveMatch ${matchId} failed (likely socket already closed)`, err);
+      });
+    }
+    this.matchId = undefined;
+    this.connRef = undefined;
   }
 }
