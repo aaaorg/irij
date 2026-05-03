@@ -17,9 +17,9 @@ export class BootScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    // Po boot přejdi do WorldScene — ta si sama sjedná Nakama session.
-    this.time.delayedCall(500, () => {
-      this.scene.start('WorldScene');
+    // Po krátkém boot frame přejdi na login. Connect/error UI žije v LoginScene.
+    this.time.delayedCall(300, () => {
+      this.scene.start('LoginScene');
     });
   }
 }
