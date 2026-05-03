@@ -17,7 +17,7 @@ export class BootScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    // Po boot přejdi do WorldScene
+    // Po boot přejdi do WorldScene — ta si sama sjedná Nakama session.
     this.time.delayedCall(500, () => {
       this.scene.start('WorldScene');
     });
