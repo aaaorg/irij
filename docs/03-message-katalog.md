@@ -203,16 +203,17 @@ Změna `display_name`, deduct denáry, cooldown.
 **Payload:** `{ target: {x, y}, client_seq: number }`.
 **Validace:**
 - `target` v rozsahu walkable mask
-- Cesta A* z aktuální pozice na target ≤ 64 dlaždic (anti-teleport request)
+- Cesta **8-směrovým A*** (cardinal + diagonal, octile cost, no-corner-cutting — viz [ADR-020](04-tech-adr.md#adr-020-8-směrový-pohyb-octile-a)) z aktuální pozice na target ≤ 64 kroků (anti-teleport request, cap je v krocích bez ohledu na zastoupení diagonál)
 - Hráč není pod stunem / jinou movement blokací
-**Effect:** server pathfindne, uloží path do match state, začne broadcastit pohyb.
-**Response (implicit):** `ENTITY_MOVED` série.
+**Effect:** server pathfindne, uloží path do match state, broadcastuje `ENTITY_MOVED` 1× s celou path.
+**Response (implicit):** `ENTITY_MOVED` (1×) nebo `MOVE_REJECTED`.
 
 ### `ENTITY_MOVED` (server → klient broadcast)
 **Payload:** `{ entity_id, from, path: [{x,y}, ...], speed_tps, started_at_tick }`.
 **Frekvence:** **1× per MOVE_REQUEST acceptance** (path-based broadcast per [ADR-019](04-tech-adr.md#adr-019-entity_moved--path-based-broadcast-runescapetibia-model)) — ne 10 Hz tile-by-tile. Server pošle celou path; klient lokálně lerpuje plynule per-tile (RuneScape/Tibia model). Mid-path interrupt (klik někam jinam) = re-broadcast s aktuální pozicí jako `from`.
+**Path:** sekvence kroků z 8-směrového A* (sousední položky se mohou lišit o ±1 v x i y — per [ADR-020](04-tech-adr.md#adr-020-8-směrový-pohyb-octile-a)).
 **Broadcast scope:** entity v 3×3 chunkovém okolí cíle (per ADR-007).
-**Klient:** TweenChain z `path` tilů, per-tile linear lerp `1000 / speed_tps` ms, depth update na začátku každého linku pro Y-sort.
+**Klient:** deterministic update-loop ze `(from, path, speed_tps, started_at_ms)`, lineární lerp mezi sousedními tile centry `1000 / speed_tps` ms, depth update on-the-fly pro Y-sort. Lerp je směrově agnostický — diagonální step se vykreslí stejným kódem jako cardinal.
 
 ### `WORLD_SNAPSHOT` (server → klient)
 **Payload:** `{ tick, entities: [{ id, type, position, hp_pct, path?, speed_tps?, started_at_tick?, ... }], objects, drops }`.
@@ -227,8 +228,8 @@ Změna `display_name`, deduct denáry, cooldown.
 - `rate_limited` — překročen 10 req/s sliding window per userId.
 - `stunned` — hráč má status effect blokující movement (4b: stub, Phase 6+ implementuje).
 - `out_of_bounds` — `target.{x,y}` mimo dimenze walkable mask. Anti-cheat.
-- `no_path` — target není walkable a v `NEAREST_WALKABLE_BFS_RADIUS` (8) tilů žádný walkable.
-- `too_far` — A* nenajde cestu (unreachable), nebo cesta překročí `MAX_PATH_LENGTH_TILES` (64).
+- `no_path` — target není walkable a v `NEAREST_WALKABLE_BFS_RADIUS` (8) Chebyshev-kroků 8-conn BFS žádný walkable.
+- `too_far` — 8-směrový A* nenajde cestu (unreachable), nebo cesta překročí `MAX_PATH_LENGTH_TILES` (64 kroků).
 
 **Klient:** echo `client_seq` umožňuje reconciliation s lokální prediction. 4b klient jen `console.warn`; 4c použije pro snap-back na poslední server-confirmed pozici.
 

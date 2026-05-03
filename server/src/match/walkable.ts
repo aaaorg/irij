@@ -104,10 +104,14 @@ export function isWalkable(mask: WalkableMask, x: number, y: number): boolean {
   return chunk[ly * CHUNK_SIZE_TILES + lx] === 1;
 }
 
-// 4-directional BFS — vrátí nejbližší walkable tile v zadaném radius, nebo null.
-// Phase 4a: API existuje, ale fallback se nevolá (žádný movement zatím). 4b ho
-// použije pro click-on-non-walkable UX (klient klikne na vodu → najdi břeh).
-// Implementace je plnohodnotná, žádný stub — ať 4b nemusí refaktorovat.
+// 8-směrové BFS — vrátí nejbližší walkable tile v zadaném radius, nebo null.
+// Použije se jako fallback pro click-on-non-walkable UX (klient klikne na vodu →
+// najdi nejbližší břeh). Per ADR-020 jde o pohyb 8-směrový, takže "nejbližší"
+// znamená Chebyshev distance (max(|dx|,|dy|)), ne Manhattan — tile diagonálně
+// 1 krok je stejně dosažitelný jako tile cardinálně 1 krok.
+//
+// `maxRadius` se interpretuje jako BFS hloubka = Chebyshev distance v krocích;
+// hodnota 8 znamená "v okruhu 8 kroků libovolnou kombinací cardinal/diagonal".
 export function nearestWalkable(
   mask: WalkableMask,
   x: number,
@@ -126,11 +130,19 @@ export function nearestWalkable(
     if (node.d > 0 && isWalkable(mask, node.x, node.y)) {
       return { x: node.x, y: node.y };
     }
+    // 8-směrová expanze — 4 cardinal + 4 diagonal. Match-uje pohybový model A*
+    // (pathfinding.ts) a `WORLD_TICK` advance: kdyby fallback vrátil tile dál
+    // přes 4-conn BFS, A* by se k němu pak dostal kratší 8-conn cestou a
+    // semantika "nejbližší dosažitelný" by lhala.
     const neighbors = [
       { x: node.x + 1, y: node.y },
       { x: node.x - 1, y: node.y },
       { x: node.x, y: node.y + 1 },
       { x: node.x, y: node.y - 1 },
+      { x: node.x + 1, y: node.y + 1 },
+      { x: node.x + 1, y: node.y - 1 },
+      { x: node.x - 1, y: node.y + 1 },
+      { x: node.x - 1, y: node.y - 1 },
     ];
     for (const n of neighbors) {
       const k = `${n.x},${n.y}`;

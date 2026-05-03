@@ -537,7 +537,7 @@ Tento ADR drift opravuje a fixuje engineering kontrakt **dřív, než vznikne pr
 4. **Y-sort depth ordering** — všechny dynamické sprity (postavy, mobi, drops, projektily) musí mít `sprite.depth = world_y * DEPTH_SCALE + sprite.feet_offset` per frame. Bez tohoto strom v popředí nebude překrývat postavu vzadu. Helper v `client/src/render/ysort.ts`.
 5. **Tilemap orientation** — Phaser `Tilemap` s `orientation: ISOMETRIC`, mapy autorované v Tiled jako isometric (staggered orientation u Tiled je separátní volba — nepoužíváme, držíme se klasického isometric).
 6. **Multi-height objekty** (zdi, střechy, schody) — autorováné jako vícevrstvé Tiled objekty + per-layer depth offset. Z-fighting řešen explicitními depth bandami (terrain `0–999`, props `1000–9999`, dynamic entities `10000+`).
-7. **Sprite sheets postav** — minimum **4 směry** (NE, NW, SE, SW v isometric kompasu), ideálně 8 pro animace; každý směr má walk cycle ≥ 4 framy. Equipment overlay (zbraň, helma, …) layer-renderován per direction.
+7. **Sprite sheets postav** — pohyb je 8-směrový (per [ADR-020](#adr-020-8-směrový-pohyb-octile-a)), takže ideálně **8 směrů** sprite per character (N, NE, E, SE, S, SW, W, NW v isometric kompasu); minimum 4 hlavní iso směry (NE, NW, SE, SW) s cardinal směry mapovanými na nejbližší diagonální facing pro Phase 4–5 polish-grade UX. Každý směr má walk cycle ≥ 4 framy. Equipment overlay (zbraň, helma, …) layer-renderován per direction. **Phase 4c MVP:** statický `FRAME_FACING_SE` napříč všemi pohyby — animace per direction přijde v Phase 6+ s polish sprite anims a vyžádá si 8-frame sheet.
 8. **Camera** — `Phaser.Cameras.Main` s `centerOn(player.screen_x, player.screen_y)`; smooth follow v isometric je identický jako v ortho, jen souřadnice přes projekci.
 
 ### Co se _nemění_
@@ -566,7 +566,7 @@ Phase 0 + 1 jsou nedotčené (pure connect, žádný render). Náklady jsou tedy
 | Phase 3 (statická mapa) | +0.5 dne | Iso tilemap render + projection util |
 | Phase 4 (movement) | +2 hod | Click-to-tile inverze, sprite Y-sort |
 | Phase 6 (combat) | 0 | Combat je world-space; jen Y-sort floating dmg textů |
-| Phase 7 (equipment vizuál) | +30–50 % asset času | 4–8 směrů per layer vs 4 v top-down |
+| Phase 7 (equipment vizuál) | +30–50 % asset času | 8 směrů per layer (per ADR-020) vs 4 v top-down |
 | Phase 18 (polish + content) | +20 % asset času | Iso authoring je o něco pomalejší než ortho 3/4 |
 
 **Total scope dopad:** odhadem +3–5 dnů přes celý MVP, primárně asset overhead. Render-side overhead je jednorázový (projekce + ysort util, ~1 den implementace).
@@ -620,6 +620,43 @@ Phase 0 + 1 jsou nedotčené (pure connect, žádný render). Náklady jsou tedy
 - Interrupt mechanismus (combat stun, change cíle uprostřed pathu) = re-broadcast nového `ENTITY_MOVED` s novou path od aktuální pozice. Combat-driven interrupts přijdou v Phase 6 (mob aggro); MVP scope = jen change cíle (klik někam jinam mid-path)
 - Klient–server clock drift: klient používá `Date.now()` jako baseline, takže ~50 ms network latency mezi server tick a klient receipt znamená klient lerpuje vždy o ~50 ms za serverem. Pro 100 CCU lokální dev zanedbatelné. Post-MVP polish: explicit clock sync přes `SERVER_TICK` opcode (73, momentálně nepoužitý) + 1 Hz `WORLD_SNAPSHOT` keepalive jako fallback proti acumulated drift
 - `ADR-007` tickrate tabulka (řádek „Movement broadcast") aktualizována: per-tick frekvence se mění na „1× per MOVE_REQUEST acceptance"
+
+---
+
+## ADR-020: 8-směrový pohyb (octile A*)
+
+**Status:** Accepted (2026-05-03)
+
+**Kontext:** Phase 4b implementoval pathfinding 4-směrový (cardinal N/S/E/W, Manhattan heuristika). Server-side komentář v [pathfinding.ts](../server/src/match/pathfinding.ts) to obhajoval „matchne iso aesthetic + zjednodušuje range validaci pro budoucí combat". V praxi ale [01 Scope](01-scope-and-pillars.md) ani [02c Svět](02c-data-model-svet.md) tuhle restrikci neukotvily a iso projekce naopak zve k diagonálnímu pohybu (sousední iso tile diagonálně je vizuálně blíž než cardinal, sprite cesta vypadá zubatě). Uživatel reportoval, že cesta po crossroads (25,25) → (30,30) jede schodovitě N-E-N-E místo přirozeného NE-NE-NE-NE-NE.
+
+**Rozhodnutí:** Pohyb je **8-směrový** (4 cardinal + 4 diagonal: N, NE, E, SE, S, SW, W, NW). A* používá:
+- **Octile cost:** cardinal step = 1, diagonal step = √2 (≈ 1.4142). Reflektuje skutečnou Euclidean distance v unit gridu.
+- **Octile heuristika:** `h(a,b) = max(|dx|,|dy|) + (√2-1) · min(|dx|,|dy|)`. Admissible pro 8-conn grid s octile costs.
+- **No-corner-cutting:** diagonální krok mezi `(x,y)` a `(x+dx, y+dy)` je povolen jen pokud jsou `(x+dx, y)` AND `(x, y+dy)` walkable. Bez toho by sprite „pronikal rohem" mezi dvě non-walkable dlaždice (typicky vodní L-roh kolem břehu) — vypadá jako bug a komplikuje budoucí tile-edge bariéry.
+- **Diagonal-first expansion:** sousedí pole iteruje diagonály před cardinaly, takže při f-tie A* expanduje diagonální node dřív → výsledné cesty jsou vizuálně přímější (méně zubatého střídání).
+- **Step count cap = 64** (`MAX_PATH_LENGTH_TILES`) — interpretovaný v krocích, ne v octile costu. Diagonální path 64 kroků pokryje až ~90.5 Euclidean unit; cardinal path 64 kroků pokryje 64 unit. Cap stejný v obou případech; smysl konstanty (anti-teleport request) zůstává.
+
+**Krok = atomický čas:** cardinal i diagonal step zabírá `1/speed_tps` sekund, tj. diagonál je v Euclidean smyslu ~1.41× rychlejší (`√2 · speed_tps` units/s). Tím sledujeme tradici grid MMO (RuneScape, Tibia) a držíme klient lerp logiku jednoduchou (lineární interpolace mezi sousedními tile centry, směrově agnostická). Případnou kompenzaci „cardinal i diagonal stejně rychlé v Euclidean smyslu" lze zavést post-MVP přes per-step duration, pokud playtesting odhalí UX problém.
+
+**Nearest-walkable BFS** (fallback pro click-on-non-walkable, [walkable.ts](../server/src/match/walkable.ts)) je rovněž 8-směrový (Chebyshev distance místo Manhattan). Bez tohoto by 4-conn BFS vrátil tile dál, k němuž by se 8-conn A* dostal kratší cestou — semantika „nejbližší dosažitelný" by lhala.
+
+**Důvody:**
+- Přirozenější pohyb po otevřeném prostoru, žádné schodovité cesty
+- Kratší časové trvání cesty na typickém průřezu (Chebyshev distance ≤ Manhattan)
+- Octile cost + heuristika je textbook 8-conn A* — žádná exotika, dobře známá perf charakteristika
+- No-corner-cutting drží invariant „path neprochází přes nelinii non-walkable bloku" → triviální future-proof pro tile-edge bariéry
+
+**Zvažované alternativy:**
+- **Uniform g=1, Chebyshev heuristika** — admissible a dává step-optimal path, ale nemotivuje preferenci přímých diagonálních cest. Cesta (0,0)→(2,1) vychází stejně cost-wise jako NE-N nebo N-NE; A* vybere podle pořadí push do heap. Octile cost přirozeně preferuje rovnější trasy bez tie-break trikem.
+- **Theta\*** (any-angle pathfinding, neboli post-process line-of-sight smoothing) — odmítnuto pro MVP: server musí posílat cestu po dlaždicích pro deterministic klient lerp + chunk-broadcast; any-angle by si vyžádalo jiný klient render model a continuous coords v match state. Kandidát na post-MVP polish, jakmile bude zavedený movement animation system.
+- **Zachovat 4-směrový pohyb** — odmítnuto: user reported issue, zubaté cesty v iso projekci, žádný technický důvod blokovat diagonály (rozsahová validace pro combat funguje stejně přes Chebyshev distance jako přes Manhattan).
+
+**Důsledky:**
+- [pathfinding.ts](../server/src/match/pathfinding.ts) refaktor: 8 sousedních offsetů, octile cost (g je float), step count tracker pro `MAX_PATH_LENGTH_TILES` cap, no-corner-cutting check
+- [walkable.ts](../server/src/match/walkable.ts) `nearestWalkable`: 8-směrová BFS expanze, semantika `maxRadius` = Chebyshev distance
+- Klient (`WorldScene.update()`) **beze změny** — lerp je už směrově agnostický (`startPx + (endPx - startPx) * subTile` pro x/y); diagonální step se vykreslí stejně jako cardinal
+- Range validace pro budoucí combat (Phase 6+) bude používat Chebyshev distance místo Manhattan (`max(|dx|,|dy|)` místo `|dx|+|dy|`)
+- Asset overhead per [ADR-018](#adr-018-isometric-rendering--explicitní-engineering-kontrakt): pro vizuální polish je cílem 8 sprite směrů, ne 4. Phase 4c stále pojede s `FRAME_FACING_SE` static — animace per direction přijde v Phase 6+ s polish sprite anims
 
 ---
 
@@ -681,3 +718,4 @@ Tyto se vyřeší při skutečném provisioningu, ne v designu:
 - **2026-05-03** — Draft 1.3: přidán ADR-018 (isometric rendering — engineering kontrakt). Isometric byl už v scope od 01 Scope a ADR-001, ale chyběla projection/Y-sort/tile-size specifikace a v action planu Phase 3 + CLAUDE.md byl zamíchán top-down placeholder (Kenney Tiny Town). ADR-018 drift fixuje a uzamyká 2:1 dimetric, 64×32 footprint, depth ordering konvenci. Kódový dopad zatím nulový (Phase 0+1 jsou pure connect, žádný render).
 - **2026-05-03** — Draft 1.4: přidán ADR-019 (ENTITY_MOVED = path-based broadcast). Phase 4 follow-up po user-reported trhaném pohybu („1 → 2, pauza, 2 → 3, pauza"); per-tile broadcast (4b) měl jitter 300–400 ms ze server tick rounding. ADR-019 přepíná protokol na single broadcast s celou path (RuneScape/Tibia model), klient lokálně lerpuje plynule. ADR-007 tickrate tabulka updatovaná.
 - **2026-05-03** — Draft 1.5: ADR-019 doplněn o **klient deterministic update-loop** (místo Phaser TweenChain). User-reported drift po alt-tab: Phaser tweens jedou přes `requestAnimationFrame`, browser ho v hidden tabu pause-uje, sprite po návratu do tabu pokračoval od starého stavu místo current server position. Fix: klient drží wall-clock baseline (`Date.now()`) a v scene `update()` každý frame deterministic-ky recomputuje sprite pozici z elapsed × speed_tps. Self-correcting bez Page Visibility API — tab return = první update spočítá correct pozici a sprite skočí/lerpne na ni.
+- **2026-05-03** — Draft 1.6: přidán ADR-020 (8-směrový pohyb, octile A*). User-reported zubatý pohyb v iso projekci — cesta po crossroads jela schodovitě N-E-N-E místo přímé NE-NE. Phase 4 pathfinding byl 4-směrový (Manhattan heuristika) bez technického důvodu krom „matchne iso aesthetic" — naopak iso projekce zve k diagonálům. ADR-020 přepíná na 8-směrový A* (cardinal + diagonal, octile cost √2 pro diagonal, no-corner-cutting), 8-směrové nearest-walkable BFS. Klient bez změny (lerp je směrově agnostický). ADR-018 sprite směry update na 8 (cíl), Phase 4c MVP stále 1-frame static. Code: [pathfinding.ts](../server/src/match/pathfinding.ts), [walkable.ts](../server/src/match/walkable.ts).

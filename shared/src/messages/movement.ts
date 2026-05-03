@@ -12,9 +12,15 @@ export interface MoveRequest {
 // recomputuje sprite pozici. Self-correcting proti hidden-tab drift. Mid-path
 // změna cíle = re-broadcast s aktuální `from` jako začátkem nového path.
 //
+// Path entries jsou produkované 8-směrovým A* (per ADR-020) — sousední položky
+// se mohou lišit o 1 v x i y (diagonální krok). Klient lerpuje lineárně mezi
+// dvěma sousedními tile centry, takže projekční math je směrově agnostický.
+//
 //   - `from`: aktuální server position v okamžiku broadcast (start path).
 //   - `path`: sekvence tilů od `from` (NEZAHRNUJE `from`, prvý prvek = první step).
-//   - `speed_tps`: tiles per second (= MOVEMENT_SPEED_TPS_BASE pro MVP).
+//   - `speed_tps`: tiles per second (cardinal i diagonal step zabírá stejný čas
+//     1/speed_tps; diagonal je tedy ~1.41× rychlejší v Euclidean smyslu — viz
+//     ADR-020). Pro MVP = MOVEMENT_SPEED_TPS_BASE.
 //   - `started_at_tick`: server tick kdy path začal — klient může vypočítat
 //     skutečnou pozici v daný moment pro late-join sync.
 export interface EntityMoved {

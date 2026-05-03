@@ -13,7 +13,7 @@
 - **Souřadnice:** celočíselné `(x, y)`, `i32`. Žádný continuous movement, žádný subpixel.
 - **Origin** (0, 0) = severozápadní roh světa. X roste na východ, Y roste na jih (image-coord convention, pasuje k Phaser).
 - **Dlaždice:** **48 × 48 px** (rozhodnutí 2026-05-01).
-- Pohyb hráče = 1 dlaždice / movement tick. Movement broadcast 10 Hz, ale pohyb po dlaždicích je diskrétní (interpolace na klientovi pro plynulost).
+- Pohyb hráče = 1 dlaždice (cardinal nebo diagonal) / movement step. Pohyb je **8-směrový** (4 cardinal + 4 diagonal) — viz [ADR-020](04-tech-adr.md#adr-020-8-směrový-pohyb-octile-a). Pohyb po dlaždicích je diskrétní (interpolace na klientovi pro plynulost), broadcast je path-based 1× per MOVE_REQUEST acceptance (ADR-019), ne 10 Hz tile-by-tile.
 
 ### Otevřený svět vs. zóny
 
@@ -251,8 +251,8 @@ Když to budeme řešit, zvážíme:
 
 ## Constraints / invariants
 
-1. **Pohyb:** server vždy validuje cestu A* na walkable mask. Klient nikdy nedefinuje vlastní cestu autoritativně.
-2. **Speed cap:** `tiles_per_second` per hráč max ~3 (provisional). Server odmítá pohyb rychlejší.
+1. **Pohyb:** server vždy validuje cestu **8-směrovým A*** (cardinal + diagonal, octile cost, no-corner-cutting — viz [ADR-020](04-tech-adr.md#adr-020-8-směrový-pohyb-octile-a)) na walkable mask. Klient nikdy nedefinuje vlastní cestu autoritativně.
+2. **Speed cap:** `tiles_per_second` per hráč max ~3 (provisional). Step je atomický — cardinal i diagonal zabírá stejný čas 1/speed_tps. Server odmítá pohyb rychlejší.
 3. **Kolize:** dvě entity (hráč/mob/NPC) nemohou stát na stejné dlaždici současně — výjimka loot drop a effect items.
 4. **Resource gating:** vytěžit node = `tool_tier ≥ node_tier` AND `skill_level ≥ tier_required`.
 5. **Instance entry:** vstup do `WorldInstance` validovaný (questovka, level gate, party check).
