@@ -46,3 +46,37 @@ export const HOMESICKNESS_DAMAGE_PENALTY_PCT = 15;
 
 // Network
 export const HEARTBEAT_INTERVAL_MS = 15_000;
+
+// Storage collections (Nakama Storage Engine, klíč = userId) — viz docs/02a sekce Storage layer notes.
+export const STORAGE_COLLECTIONS = {
+  PLAYER: 'player',
+  PLAYER_SKILLS: 'player_skills',
+  PLAYER_INVENTORY: 'player_inventory',
+} as const;
+
+// Profile validation — viz docs/02a Player.username / display_name.
+export const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,16}$/;
+export const DISPLAY_NAME_MIN = 3;
+export const DISPLAY_NAME_MAX = 24;
+export const APPEARANCE_OPTIONS = 12; // 0..11 inclusive, viz Appearance v 02a
+
+// Master enumerace pro inicializaci nové postavy. Hodnoty musí matchnout types/player.ts unions.
+export const ATRIBUT_NAMES = ['strength', 'dexterity', 'intelligence', 'vitality'] as const;
+
+export const SKILL_NAMES = [
+  'melee', 'ranged', 'magic', 'defense',
+  'mining', 'woodcutting', 'fishing', 'herbalism', 'hunting',
+  'smithing', 'cooking', 'tailoring', 'alchemy', 'carpentry',
+  'storytelling', 'prayer', 'thievery',
+] as const;
+
+export const EQUIPMENT_SLOTS = [
+  'helmet', 'cape', 'amulet', 'weapon', 'body',
+  'shield', 'legs', 'gloves', 'boots', 'ring', 'holster',
+] as const;
+
+// Spawn defaults pro nově vytvořené postavy (Phase 2 placeholder, Phase 3+ ladí podle mapy).
+export const DEFAULT_SPAWN_ZONE = 'blatiny';
+export const DEFAULT_SPAWN_POSITION = { x: 50, y: 50 } as const;
+export const DEFAULT_HP = 10;
+export const DEFAULT_MANA = 0;

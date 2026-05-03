@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { NakamaConnection } from '../nakama.js';
-import { REGISTRY_KEY_CONNECTION } from './LoginScene.js';
+import { REGISTRY_KEY_CONNECTION, REGISTRY_KEY_PLAYER, type PlayerProfile } from './LoginScene.js';
 
 export class WorldScene extends Phaser.Scene {
   private connection?: NakamaConnection;
@@ -11,24 +11,30 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     const conn = this.registry.get(REGISTRY_KEY_CONNECTION) as NakamaConnection | undefined;
+    const profile = this.registry.get(REGISTRY_KEY_PLAYER) as PlayerProfile | undefined;
 
-    if (!conn) {
-      // Defenzivní fallback — WorldScene by neměla být spuštěna bez connection,
+    if (!conn || !profile) {
+      // Defenzivní fallback — WorldScene by neměla být spuštěna bez connection a profilu,
       // ale kdyby přes deeplink / restart, vrať se na login.
-      console.warn('WorldScene started without connection — returning to LoginScene');
+      console.warn('WorldScene started without connection/profile — returning to LoginScene');
       this.scene.start('LoginScene');
       return;
     }
 
     this.connection = conn;
-    const userId = conn.session.user_id ?? '<unknown>';
+    const { display_name, current_zone_id, current_position } = profile.player;
 
     this.add
-      .text(this.scale.width / 2, this.scale.height / 2, `Vítej v Iriji\n${userId}\n(WorldScene — TODO Phase 3+)`, {
-        fontSize: '20px',
-        color: '#d4c5b0',
-        align: 'center',
-      })
+      .text(
+        this.scale.width / 2,
+        this.scale.height / 2,
+        `Vítej v Iriji\n${display_name}\n${current_zone_id} (${current_position.x}, ${current_position.y})\n(WorldScene — TODO Phase 3+)`,
+        {
+          fontSize: '20px',
+          color: '#d4c5b0',
+          align: 'center',
+        },
+      )
       .setOrigin(0.5);
 
     conn.socket.ondisconnect = (evt) => {

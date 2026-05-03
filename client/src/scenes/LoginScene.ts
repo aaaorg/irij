@@ -1,8 +1,14 @@
 import Phaser from 'phaser';
+import type { GetSelfResponse } from 'irij-shared/messages';
 import { getOrCreateDeviceId } from '../device.js';
-import { connectAsGuest, type NakamaConnection } from '../nakama.js';
+import { connectAsGuest } from '../nakama.js';
+import { callRpc } from '../rpc.js';
 
 export const REGISTRY_KEY_CONNECTION = 'nakama.connection';
+export const REGISTRY_KEY_PLAYER = 'irij.player';
+
+// Když get_self vrátí exists=true, hodnota uložená pod REGISTRY_KEY_PLAYER má tento tvar.
+export type PlayerProfile = Extract<GetSelfResponse, { exists: true }>;
 
 interface AuthButton {
   rect: Phaser.GameObjects.Rectangle;
@@ -129,12 +135,24 @@ export class LoginScene extends Phaser.Scene {
       this.registry.set(REGISTRY_KEY_CONNECTION, conn);
       const userId = conn.session.user_id ?? '<unknown>';
       console.log(`Connected as user ${userId}`);
-      this.setStatus(`Vítej, ${userId}`, COLORS.textSuccess);
 
-      // Krátký delay aby uživatel viděl success state, pak start světa.
-      this.time.delayedCall(400, () => this.scene.start('WorldScene'));
+      this.setStatus('Načítám postavu…');
+      const self = await callRpc<Record<string, never>, GetSelfResponse>(
+        conn,
+        'rpc.profile.get_self',
+        {},
+      );
+
+      if (self.exists) {
+        this.registry.set(REGISTRY_KEY_PLAYER, self);
+        this.setStatus(`Vítej zpět, ${self.player.display_name}`, COLORS.textSuccess);
+        this.time.delayedCall(400, () => this.scene.start('WorldScene'));
+      } else {
+        this.setStatus('Žádná postava — pojď ji vytvořit.', COLORS.textSuccess);
+        this.time.delayedCall(400, () => this.scene.start('CharacterCreationScene'));
+      }
     } catch (err) {
-      console.error('Nakama connect failed', err);
+      console.error('Nakama connect / get_self failed', err);
       this.setStatus(`Spojení selhalo: ${this.formatError(err)}`, COLORS.textError);
       this.setGuestButtonEnabled(true, 'Hrát jako host');
       this.isConnecting = false;

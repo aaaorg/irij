@@ -66,18 +66,18 @@ Cíl: klient se připojí k Nakamě, autentizuje guest accountem, drží WebSock
 
 Cíl: nový hráč si vytvoří postavu (jméno, gender, appearance), persistovaná v Nakama Storage.
 
-- [ ] V `server/src/rpc/profile.ts` implementovat `rpc.profile.create_character`
-  - [ ] Validace `username` regex + unikátnost (Nakama `nk.usersGetUsername` check)
-  - [ ] Validace `display_name` length + UTF-8
-  - [ ] Validace `gender` enum, `appearance` ranges
-  - [ ] Vytvořit `Player` blob v Nakama Storage (collection: `player`, key: `userId`)
-  - [ ] Inicializovat 4 atributy + 17 skillů na lvl 1 (collection: `player_skills`)
-  - [ ] Inicializovat prázdný inventář, equipment (collection: `player_inventory`)
-- [ ] Implementovat `rpc.profile.get_self` — vrátí kompletní player state
-- [ ] V klientovi: pokud `get_self` říká postava neexistuje → ukázat character creation UI
-- [ ] Char creation UI (zatím text + klávesy, hezké UI v Phase 17): jméno, M/F, hair_id, skin_tone_id, outfit_id
-- [ ] Po vytvoření znovu zavolej `get_self`, ulož v klientovi
-- [ ] **Demo:** vytvoř 2 postavy, ověř v Nakama console → Storage → `player` collection
+- [x] V `server/src/rpc/profile.ts` implementovat `rpc.profile.create_character`
+  - [x] Validace `username` regex + unikátnost (Nakama `nk.usersGetUsername` check)
+  - [x] Validace `display_name` length + UTF-8
+  - [x] Validace `gender` enum, `appearance` ranges
+  - [x] Vytvořit `Player` blob v Nakama Storage (collection: `player`, key: `userId`)
+  - [x] Inicializovat 4 atributy + 17 skillů na lvl 1 (collection: `player_skills`)
+  - [x] Inicializovat prázdný inventář, equipment (collection: `player_inventory`)
+- [x] Implementovat `rpc.profile.get_self` — vrátí kompletní player state
+- [x] V klientovi: pokud `get_self` říká postava neexistuje → ukázat character creation UI
+- [x] Char creation UI (zatím text + klávesy, hezké UI v Phase 17): jméno, M/F, hair_id, skin_tone_id, outfit_id
+- [x] Po vytvoření znovu zavolej `get_self`, ulož v klientovi
+- [x] **Demo:** vytvoř 2 postavy, ověř v Nakama console → Storage → `player` collection
 
 ---
 
@@ -423,3 +423,5 @@ Tyhle chuti tě budou pokoušet. Odolávej.
 - **2026-05-03** — Draft 1, vytvořeno na základě dokončeného design phase. Phases 0-22 + pre-flight + týdenní rituály + risk checkpoints + parking lot.
 - **2026-05-03** — **Phase 0 dokončena** (PR #1). Lokální stack běží: Postgres 16 + Nakama 3.24 v Dockeru, klient přes Vite dev server na :5173, runtime modul načten z `server/dist/index.js`.
 - **2026-05-03** — **Phase 1 dokončena** (PR #2 + PR #4). Persistentní guest auth přes `authenticateDevice` + WebSocket session, `device_id` v `localStorage`, Boot → Login → World scene flow s funkčním error retry. Login screen má placeholder buttony pro Discord / Google / E-mail (Phase 19). Na okraj přidán **ADR-018 — isometric rendering kontrakt** (PR #3): drift fix vůči [01 Scope](01-scope-and-pillars.md), explicitní lock 2:1 dimetric projekce + Y-sort konvence pro Phase 3+.
+- **2026-05-03** — **Phase 2 dokončena**. Server: `rpc.profile.create_character` (validace username regex + unikátnost, display_name UTF-8 length, gender enum, appearance 0–11 ranges; init Player + 4 atributy + 17 skillů + 24-slot inventory + 11-slot equipment ve třech Storage kolekcích) a `rpc.profile.get_self` (kompletní player state nebo `{exists:false}`). Klient: `CharacterCreationScene` (text-mode form, Tab/šipky/Enter), Boot → Login → CharCreate / WorldScene routing podle existence postavy, `client.rpc` HTTP wrapper v [client/src/rpc.ts](../client/src/rpc.ts). Demo ověřeno přes Playwright: 3 postavy v DB s plnými bloby ve všech kolekcích, re-login po reload trefí WorldScene přímo.
+- **2026-05-03** — **Nakama upgrade 3.24.0 → 3.38.0**. Po dotazu uživatele jsem dohledal, že 3.24.0 + 3.24.1 mají bug způsobující `400 "RPC ID must be set"` na všechny HTTP `/v2/rpc/{id}` calls (fix v 3.24.2, viz [forum thread](https://forum.heroiclabs.com/t/nakama-upgrade-3-24-1-then-error-rpc-id-must-be-set-message-rpc-id-must-be-set-code-3/5725)). Bumpli jsme rovnou na latest stable 3.38.0, abychom v MVP fázi měli aktuální stack. `nakama-runtime` v1.45.0 (server-side TS API) je s 3.38.0 kompatibilní bez změn. Klientský `callRpc` helper se vrátil z dočasného `socket.rpc` workaroundu na čistý `client.rpc` HTTP.
