@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { TILE_SIZE_PX } from 'irij-shared/constants';
 import { BootScene } from './scenes/BootScene.js';
+import { LoginScene } from './scenes/LoginScene.js';
 import { WorldScene } from './scenes/WorldScene.js';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -16,7 +17,7 @@ const config: Phaser.Types.Core.GameConfig = {
     antialias: false,
     roundPixels: true,
   },
-  scene: [BootScene, WorldScene],
+  scene: [BootScene, LoginScene, WorldScene],
 };
 
 // eslint-disable-next-line no-new
