@@ -15,6 +15,10 @@ export const MOVEMENT_SPEED_TPS_BASE = 3; // tiles per second
 export const MAX_PATH_LENGTH_TILES = 64;
 
 // World scaling
+// TILE_SIZE_PX je legacy konstanta (logický scale faktor pro UI/HUD calculations).
+// Skutečný render je isometric 2:1 dimetric — viz ADR-018 a klient render konstanty
+// (TILE_W_PX = 64, TILE_H_PX = 32) v client/src/render/projection.ts (Phase 3+).
+// Server kód s pixel souřadnicemi nepracuje; všechny world coords jsou v tiles.
 export const TILE_SIZE_PX = 48;
 export const CHUNK_SIZE_TILES = 64;
 export const MVP_WORLD_SIZE_TILES = 256;

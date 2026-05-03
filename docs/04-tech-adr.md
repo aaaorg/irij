@@ -23,7 +23,7 @@
 **Rozhodnutí:** Phaser 3 (latest LTS, v3.85+) jako klientský engine, TypeScript jako jazyk.
 
 **Důvody:**
-- 2D pixel-art isometric je core vizuální volba (rozhodnutí 01) → 2D-first engine = Phaser
+- 2D pixel-art isometric je core vizuální volba (rozhodnutí [01 Scope](01-scope-and-pillars.md), engineering detail v [ADR-018](#adr-018-isometric-rendering--explicitní-engineering-kontrakt)) → 2D-first engine = Phaser
 - TypeScript ekosystém je nejlépe pokrytý LLM/Claude tooling
 - Phaser nativně podporuje touch + mouse (mobile/desktop sjednoceno)
 - Tilemap support hotový (Tiled editor → JSON → Phaser Tilemap)
@@ -507,6 +507,87 @@ irij/
 
 ---
 
+## ADR-018: Isometric rendering — explicitní engineering kontrakt
+
+**Status:** Accepted (2026-05-03)
+
+**Kontext:** [01 Scope](01-scope-and-pillars.md) odst. „Vizuální / herní styl" stanoví **2D pixel art, isometrický pohled** (Tibia jako reference). [ADR-001](#adr-001-klientský-engine--phaser-3-potvrzeno) to opakuje („2D pixel-art isometric je core vizuální volba"). V průběhu draftování ale došlo k drift mezi dokumenty:
+
+- [00 Action plan](00-action-plan.md) Phase 3 doporučuje [Kenney's Tiny Town](https://kenney.nl/assets/tiny-town) jako placeholder — to je **top-down ortogonální** asset, ne isometric
+- [shared/src/constants/index.ts](../shared/src/constants/index.ts) má `TILE_SIZE_PX = 48` bez specifikace orientace; pro 2:1 isometric je standardní footprint **64×32** nebo **128×64**, ne 48×48
+- [CLAUDE.md](../CLAUDE.md) zmiňuje pouze „2D pixel art" bez slova „isometric"
+
+Tento ADR drift opravuje a fixuje engineering kontrakt **dřív, než vznikne první sprite nebo render kód** (Phase 0+1 jsou pure auth/connect, bez rendering).
+
+### Rozhodnutí
+
+1. **Projection:** 2:1 dimetric (standardní „pixel art isometric"). Tile footprint na obrazovce **64×32 px** logicky, render scale podle device pixel ratio.
+2. **Logický grid je pořád ortogonální** — server, pathfinding (A*), collision masky, chunk index pracují s `(x, y)` world tile coords. Isometric je čistě klient-side render projection.
+3. **World ↔ screen projection** v `client/src/render/projection.ts`:
+   ```ts
+   // tile (x,y) → screen (sx,sy), origin v top tile
+   sx = (x - y) * (TILE_W / 2)
+   sy = (x + y) * (TILE_H / 2)
+
+   // inverze pro click-to-tile
+   x = (sx / (TILE_W / 2) + sy / (TILE_H / 2)) / 2
+   y = (sy / (TILE_H / 2) - sx / (TILE_W / 2)) / 2
+   ```
+   Konstanty: `TILE_W = 64`, `TILE_H = 32`.
+4. **Y-sort depth ordering** — všechny dynamické sprity (postavy, mobi, drops, projektily) musí mít `sprite.depth = world_y * DEPTH_SCALE + sprite.feet_offset` per frame. Bez tohoto strom v popředí nebude překrývat postavu vzadu. Helper v `client/src/render/ysort.ts`.
+5. **Tilemap orientation** — Phaser `Tilemap` s `orientation: ISOMETRIC`, mapy autorované v Tiled jako isometric (staggered orientation u Tiled je separátní volba — nepoužíváme, držíme se klasického isometric).
+6. **Multi-height objekty** (zdi, střechy, schody) — autorováné jako vícevrstvé Tiled objekty + per-layer depth offset. Z-fighting řešen explicitními depth bandami (terrain `0–999`, props `1000–9999`, dynamic entities `10000+`).
+7. **Sprite sheets postav** — minimum **4 směry** (NE, NW, SE, SW v isometric kompasu), ideálně 8 pro animace; každý směr má walk cycle ≥ 4 framy. Equipment overlay (zbraň, helma, …) layer-renderován per direction.
+8. **Camera** — `Phaser.Cameras.Main` s `centerOn(player.screen_x, player.screen_y)`; smooth follow v isometric je identický jako v ortho, jen souřadnice přes projekci.
+
+### Co se _nemění_
+
+- Server-authoritative model ([ADR-006](#adr-006-autoritativní-model--server-authoritative-everything))
+- Tickrate stack ([ADR-007](#adr-007-tickrates-a-frekvence)) — render frekvence ≠ tick frekvence
+- Message protokol — všechny pozice v messages jsou world-space `(x, y)` tiles, ne screen pixels
+- Chunk architektura ([ADR-005](#adr-005-match-handler-architektura--single-match-for-mvp-chunk-cluster-ready))
+- A* pathfinding — operates na logickém gridu
+
+### Důsledky
+
+- **Konstanty update:** `TILE_SIZE_PX = 48` v [shared/src/constants/index.ts](../shared/src/constants/index.ts) má dvojí význam (logický grid step, render scale) — split na `TILE_W_PX = 64` a `TILE_H_PX = 32` pro render, logický `(x, y)` zůstává v tiles bez px units
+- **Asset cost:** všechny postavy a equipmenty musí být kresleny pod 30°/2:1 angle, 4–8 směrů. AI gen (PixelLab, Scenario) to zvládá, ale prompt engineering bude jiný než pro top-down
+- **Tiled mapy:** první tilemap pro Phase 3 musí být authorovaná jako isometric, ne ortho. To znamená Tiled `New Map → Orientation: Isometric, Tile size 64×32`
+- **Phase 3 placeholder:** Kenney's Tiny Town **NEpoužitelný** (top-down). Náhrada: Kenney's [Isometric Pack](https://kenney.nl/assets?q=isometric) (CC0), nebo přiložený `Isometric_tileset.zip` (Ancient Isometric, 2:1 projection, 512×256 zdroj — bude nutné rescalovat na ~64×32 nebo držet vyšší detail s odpovídajícím viewport)
+- **Y-sort overhead:** ~O(n log n) sort dynamických spritů per frame; pro 100 CCU + ~50 mobů + drops triviální
+- **Click accuracy:** click-to-tile inverzní projekce + tile-shape hit test (kosočtverec, ne čtverec) — pomocný util `pointInIsoTile(px, py, tile_x, tile_y)`
+
+### Náklady přechodu (z hypotetického top-down stavu)
+
+Phase 0 + 1 jsou nedotčené (pure connect, žádný render). Náklady jsou tedy jen ve fázích, které ještě nezačaly:
+
+| Fáze | Náklad navíc proti top-down | Poznámka |
+| ---- | --------------------------- | -------- |
+| Phase 3 (statická mapa) | +0.5 dne | Iso tilemap render + projection util |
+| Phase 4 (movement) | +2 hod | Click-to-tile inverze, sprite Y-sort |
+| Phase 6 (combat) | 0 | Combat je world-space; jen Y-sort floating dmg textů |
+| Phase 7 (equipment vizuál) | +30–50 % asset času | 4–8 směrů per layer vs 4 v top-down |
+| Phase 18 (polish + content) | +20 % asset času | Iso authoring je o něco pomalejší než ortho 3/4 |
+
+**Total scope dopad:** odhadem +3–5 dnů přes celý MVP, primárně asset overhead. Render-side overhead je jednorázový (projekce + ysort util, ~1 den implementace).
+
+### Zvažované alternativy
+
+- **Top-down ortogonální (čistý 2D shora dolů)** — odmítnuto: ploché, nesplňuje atmosférický cíl ze [01 Scope](01-scope-and-pillars.md) („středoevropská vesnice za soumraku, lehce strašidelná")
+- **Stardew-style 3/4 perspective** (ortogonální grid + sprite tilt) — odmítnuto: nedovolí multi-height (zdi, dveře, věže) bez triků, atmosféra méně mystická než pravé iso
+- **3D s pixel art shaderem** (low-poly + dithered post-process) — odmítnuto: out of scope pro 2D-first Phaser engine ([ADR-001](#adr-001-klientský-engine--phaser-3-potvrzeno))
+- **Staggered isometric** (Tiled feature, hexagonálně-ish posun řad) — odmítnuto: méně standardní, tooling pro asset gen slabší
+
+### Risks
+
+| Riziko | Pravděpodobnost | Mitigace |
+| ------ | --------------- | -------- |
+| AI asset gen vyrobí inconsistent angle (29° vs 30° vs 35°) | střední | Style guide ADR-014 lock + manual touch-up + reference grid template |
+| Y-sort glitches u multi-tile entit (velký mob, vůz) | střední | Per-entity „anchor tile" konvence, dokumentovat v ADR-014 |
+| Click-to-tile nepřesný na hraně dlaždice | nízká | Pomocný `snapToNearestWalkable()` server-side při validaci `MOVE_REQUEST` |
+
+---
+
 ## ADR-017: Test strategy
 
 **Status:** Proposed
@@ -562,3 +643,4 @@ Tyto se vyřeší při skutečném provisioningu, ne v designu:
 - **2026-05-01** — Draft 1, vytvořeno na základě potvrzených volby Phaser + Nakama z brainstormu, plus návrhy pro language/storage/hosting/struktura.
 - **2026-05-01** — Draft 1.1: lock TypeScript server, hybrid storage, self-host na existujícím serveru s Cloudflare CDN guidance, OIDC+email+guest auth od MVP, CS+EN lokalizace od MVP. Apple Sign-In flagged jako conditional (iOS plan).
 - **2026-05-02** — Draft 1.2: Apple Sign-In přesunut do post-MVP (čeká na iOS app rozhodnutí). MVP auth: Discord + Google + Email + Guest.
+- **2026-05-03** — Draft 1.3: přidán ADR-018 (isometric rendering — engineering kontrakt). Isometric byl už v scope od 01 Scope a ADR-001, ale chyběla projection/Y-sort/tile-size specifikace a v action planu Phase 3 + CLAUDE.md byl zamíchán top-down placeholder (Kenney Tiny Town). ADR-018 drift fixuje a uzamyká 2:1 dimetric, 64×32 footprint, depth ordering konvenci. Kódový dopad zatím nulový (Phase 0+1 jsou pure connect, žádný render).
