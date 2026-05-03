@@ -5,11 +5,11 @@ export class BootScene extends Phaser.Scene {
     super('BootScene');
   }
 
-  override preload(): void {
+  preload(): void {
     // TODO: preload essentials (loading spinner sprite, font)
   }
 
-  override create(): void {
+  create(): void {
     this.add
       .text(this.scale.width / 2, this.scale.height / 2, 'Irij — boot…', {
         fontSize: '24px',

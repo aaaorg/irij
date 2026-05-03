@@ -6,6 +6,5 @@
     "jsx": "preserve",
     "types": ["vite/client"]
   },
-  "include": ["src/**/*"],
-  "references": [{ "path": "../shared" }]
+  "include": ["src/**/*"]
 }

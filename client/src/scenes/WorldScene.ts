@@ -5,7 +5,7 @@ export class WorldScene extends Phaser.Scene {
     super('WorldScene');
   }
 
-  override create(): void {
+  create(): void {
     this.add
       .text(this.scale.width / 2, this.scale.height / 2, 'WorldScene — TODO', {
         fontSize: '20px',
