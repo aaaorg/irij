@@ -107,8 +107,9 @@ Action plan v [docs/00-action-plan.md](docs/00-action-plan.md) definuje fázová
 1. **Branch naming (MVP fáze):** `dev/phase-X` nebo `dev/phase-X-stručný-popis` (např. `dev/phase-2-character-creation`). Jedna branch = jeden PR = jedna fáze nebo její sub-task. Po MVP přejdeme na klasické `feat/...` a `fix/...` (bug-fix), ale dokud action plan jede po fázích, držíme `dev/phase-X` konvenci, protože je čitelná v listu PRs i `git log`.
 2. **Commit message:** `feat(phase-X): krátký popis` (nebo `docs(...)`, `fix(...)` pokud relevantní). Tělo commitu popisuje WHY a klíčové změny — viz `git log` pro vzor. Vždy přidej `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` (nebo aktuálně použitý model).
 3. **Merge style: VŽDY `--squash`** — `gh pr merge <num> --squash --delete-branch`. Drží to lineární historii bez merge commitů. Ano, znamená to, že feature branch v `git log` po merge nezůstane jako separátní linea (žádný „Merge pull request #X" commit), ale je to záměr — jeden squashed commit = jedna fáze. **Neudělej `--merge` ani `--rebase`** kvůli konzistenci. (PRs #1–#5 byly merge commity z dřívější doby; od PR #6 jedeme squash.)
-4. **Bookkeeping (Stav line, action plan checkboxy, changelog) patří do stejného PR**, ne do follow-up — viz sekce níže.
-5. **Real-browser smoke test** před handoffem na člověka pro klient/UI/shared změny (Vite + Playwright, bez console errors, projít golden path). Typecheck + curl/Node skript nestačí.
+4. **Merge + návrat na main je součást tvé práce, ne uživatelovy.** Jakmile uživatel řekne „mergni" / „pošli to" / „je to OK" (nebo ekvivalent), provedeš celý handoff sám: `gh pr merge <num> --squash --delete-branch` → `git checkout main` → `git pull`. Neukončuj turn s instrukcí "teď to zmergeš ty" — to je drift, který už uživatel jednou musel opravit. Výjimka: pokud PR čeká na review od jiného člověka nebo CI, čekej; jinak zavři smyčku.
+5. **Bookkeeping (Stav line, action plan checkboxy, changelog) patří do stejného PR**, ne do follow-up — viz sekce níže.
+6. **Real-browser smoke test** před handoffem na člověka pro klient/UI/shared změny (Vite + Playwright, bez console errors, projít golden path). Typecheck + curl/Node skript nestačí.
 
 ## Bookkeeping po dokončení práce
 
