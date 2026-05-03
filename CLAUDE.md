@@ -100,6 +100,16 @@ Action plan v [docs/00-action-plan.md](docs/00-action-plan.md) definuje fázová
 3. Pro nové síťové zprávy přidej opcode do `shared/src/messages/opcodes.ts` ve správném číselném rozsahu, payload type do `shared/src/messages/`, a teprve pak implementuj klient + server stranu.
 4. RPC handlery patří do `server/src/rpc/{auth,profile,...}.ts` jako **pojmenované exportované funkce** (`export function authPing(...)`, ne arrow). V `server/src/main.ts` se přivážou **přímo v body `InitModule`**: `initializer.registerRpc('rpc.auth.ping', authPing)`. Match handlery v `server/src/match/*.ts` jsou taktéž top-level named functions; registrace přes object s shorthand property references (`initializer.registerMatch('world', { matchInit, matchJoin, ... })`). **Nikdy** nepoužívej helper-funkce typu `registerAuthRpcs(initializer)` ani method shorthand v object literal — Nakama Goja runtime parsuje `InitModule` AST a extrahuje handler identifikátory pouze z výrazů přímo v jeho body, neprochází do helperů a function-literal property values odmítá.
 
+## Git workflow
+
+**Žádné direct commity do `main`.** Každá změna jde přes feature branch + PR + squash merge.
+
+1. **Branch naming (MVP fáze):** `dev/phase-X` nebo `dev/phase-X-stručný-popis` (např. `dev/phase-2-character-creation`). Jedna branch = jeden PR = jedna fáze nebo její sub-task. Po MVP přejdeme na klasické `feat/...` a `fix/...` (bug-fix), ale dokud action plan jede po fázích, držíme `dev/phase-X` konvenci, protože je čitelná v listu PRs i `git log`.
+2. **Commit message:** `feat(phase-X): krátký popis` (nebo `docs(...)`, `fix(...)` pokud relevantní). Tělo commitu popisuje WHY a klíčové změny — viz `git log` pro vzor. Vždy přidej `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` (nebo aktuálně použitý model).
+3. **Merge style: VŽDY `--squash`** — `gh pr merge <num> --squash --delete-branch`. Drží to lineární historii bez merge commitů. Ano, znamená to, že feature branch v `git log` po merge nezůstane jako separátní linea (žádný „Merge pull request #X" commit), ale je to záměr — jeden squashed commit = jedna fáze. **Neudělej `--merge` ani `--rebase`** kvůli konzistenci. (PRs #1–#5 byly merge commity z dřívější doby; od PR #6 jedeme squash.)
+4. **Bookkeeping (Stav line, action plan checkboxy, changelog) patří do stejného PR**, ne do follow-up — viz sekce níže.
+5. **Real-browser smoke test** před handoffem na člověka pro klient/UI/shared změny (Vite + Playwright, bez console errors, projít golden path). Typecheck + curl/Node skript nestačí.
+
 ## Bookkeeping po dokončení práce
 
 Project state je trackovaný v repu (action plan checkboxy + CLAUDE.md Stav line + git log), **ne v memory**. Memory systém (`~/.claude/projects/.../memory/`) je pro cross-session fakta o uživateli a preferencích, ne pro stav projektu.
