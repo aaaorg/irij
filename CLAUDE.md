@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Irij** — browser MMORPG ve světě slovanského folklóru. Tick-based, 2D pixel art, **isometrický pohled** (2:1 dimetric, viz [docs/04 ADR-018](docs/04-tech-adr.md#adr-018-isometric-rendering--explicitní-engineering-kontrakt)). Phaser klient + Nakama server, sólo dev s AI asistencí. Cíl: ~100 CCU, EU latence, self-hostable.
 
-**Stav:** raná fáze (Phase 0/1 dle [docs/00-action-plan.md](docs/00-action-plan.md)). Většina match handleru, RPC a klientských scén je TODO scaffolding.
+**Stav:** Phase 0 ✓ (lokální stack běží), Phase 1 ✓ (guest auth + Boot → Login → World scene flow). Další: **Phase 2** (character creation) nebo **Phase 3** (statická isometric mapa) — viz [docs/00-action-plan.md](docs/00-action-plan.md). Match handler, většina RPC a render pipeline jsou stále TODO scaffolding.
 
 **Render konvence:** logický grid je ortogonální `(x, y)` v tiles — server, pathfinding, collision pracují čistě ve world-space. Isometric je čistě klient render projection (2:1 dimetric, screen footprint 64×32 px, projekce v `client/src/render/projection.ts`, Y-sort depth helper v `client/src/render/ysort.ts` — viz ADR-018). Žádný server kód nesmí pracovat s pixel/screen souřadnicemi.
 
@@ -99,6 +99,21 @@ Action plan v [docs/00-action-plan.md](docs/00-action-plan.md) definuje fázová
 2. Pro game logic ověř pravidla v `docs/02a-e` (postava / itemy / svět / NPC-mobi-questy / ekonomika) — constraints sekce každého dokumentu.
 3. Pro nové síťové zprávy přidej opcode do `shared/src/messages/opcodes.ts` ve správném číselném rozsahu, payload type do `shared/src/messages/`, a teprve pak implementuj klient + server stranu.
 4. RPC handlery patří do `server/src/rpc/{auth,profile,...}.ts` jako **pojmenované exportované funkce** (`export function authPing(...)`, ne arrow). V `server/src/main.ts` se přivážou **přímo v body `InitModule`**: `initializer.registerRpc('rpc.auth.ping', authPing)`. Match handlery v `server/src/match/*.ts` jsou taktéž top-level named functions; registrace přes object s shorthand property references (`initializer.registerMatch('world', { matchInit, matchJoin, ... })`). **Nikdy** nepoužívej helper-funkce typu `registerAuthRpcs(initializer)` ani method shorthand v object literal — Nakama Goja runtime parsuje `InitModule` AST a extrahuje handler identifikátory pouze z výrazů přímo v jeho body, neprochází do helperů a function-literal property values odmítá.
+
+## Bookkeeping po dokončení práce
+
+Project state je trackovaný v repu (action plan checkboxy + CLAUDE.md Stav line + git log), **ne v memory**. Memory systém (`~/.claude/projects/.../memory/`) je pro cross-session fakta o uživateli a preferencích, ne pro stav projektu.
+
+**Když mergeš PR, který dokončí celou fázi** z [docs/00-action-plan.md](docs/00-action-plan.md) (= všechny task-checkboxy té fáze jsou splněné):
+
+1. Flipni všechny `[ ]` → `[x]` u dané fáze v action planu
+2. Updatuj řádek `**Stav:**` na začátku tohoto souboru (co je hotové, co je další)
+3. Přidej entry do sekce „Změnový log" na konci action planu (datum + co se dokončilo + odkaz na PR čísla)
+4. Pokud PR přidává/mění ADR, doplň také changelog na konci [docs/04-tech-adr.md](docs/04-tech-adr.md)
+
+**Když mergeš PR, který dokončí jednotlivý task uprostřed fáze:** stačí flipnout daný checkbox v action planu. Stav line a changelog netřeba.
+
+**Tyto updaty patří do stejného PR jako práce sama**, ne do separátního follow-up PR. Drift se tím nenahromadí a fresh session s "pokračuj" vidí aktuální stav v prvním přečteném souboru (CLAUDE.md je auto-loaded, action plan je hned referencovaný).
 
 ## Co v repu zatím **není** (a neměl bys to vymýšlet)
 
