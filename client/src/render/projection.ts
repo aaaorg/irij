@@ -42,11 +42,20 @@ export function screenToWorld(sx: number, sy: number): WorldTile {
   };
 }
 
-// Click-to-tile: screenToWorld vrací floats — pro tile lookup je třeba floor.
-// Vstupní souřadnice musí být v stejném prostoru jako worldToScreen výstup
-// (tj. relativní k anchor tile (0,0), ne raw canvas pixely — odeber camera/origin offset
-// před voláním).
+// Click-to-tile hit test pro 2:1 dimetric diamond mřížku.
+//
+// worldToScreen(x, y) vrací bbox top-left tile (Phaser ISOMETRIC tilemap konvence).
+// Diamond center tile (x, y) je tedy ((x-y)*HW + HW, (x+y)*HH + HH).
+// Pro lookup "ve kterém diamondu leží point" musíme posunout screen tak, aby
+// celočíselný world coord odpovídal centru (ne rohu bbox), a pak round (ne floor)
+// — diamond se rozkládá symetricky ±0.5 v world prostoru kolem centeru
+// (|Δx| + |Δy| ≤ 0.5 = uvnitř diamondu).
+//
+// Vstup je relativní k anchor tile (0,0) — odeber camera/origin offset před voláním
+// (např. Phaser pointer.worldX/worldY, ne raw canvas pixels).
 export function screenToTile(sx: number, sy: number): WorldTile {
-  const w = screenToWorld(sx, sy);
-  return { x: Math.floor(w.x), y: Math.floor(w.y) };
+  const adjSx = sx - HALF_W;
+  const adjSy = sy - HALF_H;
+  const w = screenToWorld(adjSx, adjSy);
+  return { x: Math.round(w.x), y: Math.round(w.y) };
 }
