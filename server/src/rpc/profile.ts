@@ -1,14 +1,15 @@
-// Profile RPCs — viz docs/03-message-katalog.md sekce Profile
+// Profile RPCs — viz docs/03-message-katalog.md sekce Profile.
+// Handlery jsou pojmenované exportované funkce; registrují se inline v main.ts InitModule.
 
-export function registerProfileRpcs(initializer: nkruntime.Initializer): void {
-  // TODO:
-  //   rpc.profile.create_character
-  //   rpc.profile.get_self
-  //   rpc.profile.update_settings
-
-  initializer.registerRpc('rpc.profile.get_self', (ctx, logger, _nk, _payload) => {
-    logger.info(`get_self called by ${ctx.userId}`);
-    // TODO: load Player + skills + atributy + inventory + equipment
-    return JSON.stringify({ player_id: ctx.userId, ready: false });
-  });
+export function profileGetSelf(
+  ctx: nkruntime.Context,
+  logger: nkruntime.Logger,
+  _nk: nkruntime.Nakama,
+  _payload: string,
+): string {
+  logger.info(`get_self called by ${ctx.userId}`);
+  // TODO: load Player + skills + atributy + inventory + equipment
+  return JSON.stringify({ player_id: ctx.userId, ready: false });
 }
+
+// TODO: profileCreateCharacter, profileUpdateSettings

@@ -1,5 +1,7 @@
 // Svět — viz docs/02c-data-model-svet.md
 
+import { CHUNK_SIZE_TILES } from '../constants/index.js';
+
 export interface Position {
   x: number;
   y: number;
@@ -9,8 +11,6 @@ export interface ChunkId {
   cx: number;
   cy: number;
 }
-
-export const CHUNK_SIZE_TILES = 64;
 
 export function chunkOf(pos: Position): ChunkId {
   return {

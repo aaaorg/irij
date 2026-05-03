@@ -1,29 +1,48 @@
 // Nakama TypeScript runtime entry point.
 // Volá se při startu Nakama serveru — registruje RPCs, match handler, hooks.
+//
+// DŮLEŽITÉ: Všechny `initializer.registerRpc(...)` a `initializer.registerMatch(...)`
+// volání musí být PŘÍMO v body InitModule. Nakama Goja runtime statically analyzuje
+// InitModule AST a extrahuje handler identifikátory pouze z přímých výrazů — nezachází
+// do helper-funkcí. Helpery typu `registerAuthRpcs(initializer)` nefungují.
 
-import { registerAuthRpcs } from './rpc/auth.js';
-import { registerProfileRpcs } from './rpc/profile.js';
-import { worldMatchHandler } from './match/world.js';
+import { authPing } from './rpc/auth.js';
+import { profileGetSelf } from './rpc/profile.js';
+import {
+  matchInit,
+  matchJoinAttempt,
+  matchJoin,
+  matchLeave,
+  matchLoop,
+  matchTerminate,
+  matchSignal,
+} from './match/world.js';
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function InitModule(
-  ctx: nkruntime.Context,
+export function InitModule(
+  _ctx: nkruntime.Context,
   logger: nkruntime.Logger,
-  nk: nkruntime.Nakama,
+  _nk: nkruntime.Nakama,
   initializer: nkruntime.Initializer,
 ): void {
   logger.info('Irij server module initializing…');
 
-  // RPCs
-  registerAuthRpcs(initializer);
-  registerProfileRpcs(initializer);
+  // Auth RPCs
+  initializer.registerRpc('rpc.auth.ping', authPing);
 
-  // Match handler
-  initializer.registerMatch('world', worldMatchHandler);
+  // Profile RPCs
+  initializer.registerRpc('rpc.profile.get_self', profileGetSelf);
+
+  // Match handlers — Nakama vyžaduje object s shorthand property references na top-level
+  // pojmenované funkce (ne method shorthand / function literal).
+  initializer.registerMatch('world', {
+    matchInit,
+    matchJoinAttempt,
+    matchJoin,
+    matchLeave,
+    matchLoop,
+    matchTerminate,
+    matchSignal,
+  });
 
   logger.info('Irij server module ready.');
 }
-
-// Nakama TS runtime hledá globální `InitModule` symbol
-// @ts-expect-error -- exposed pro Nakama runtime loader
-!InitModule && InitModule.bind(null);
