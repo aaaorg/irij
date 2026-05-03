@@ -85,17 +85,17 @@ Cíl: nový hráč si vytvoří postavu (jméno, gender, appearance), persistova
 
 Cíl: render základní mapy v Phaseru, hráč vidí svou postavu (bez pohybu). **Isometric** (2:1 dimetric, viz [docs/04 ADR-018](04-tech-adr.md#adr-018-isometric-rendering--explicitní-engineering-kontrakt)).
 
-- [ ] Implementovat `client/src/render/projection.ts` — `worldToScreen(x, y)` a `screenToWorld(sx, sy)` per ADR-018
-- [ ] Implementovat `client/src/render/ysort.ts` — helper pro depth-by-y sprite sort
-- [ ] Vytvořit **Tiled** test mapu 50×50 dlaždic, **isometric orientation, 64×32 px tile footprint**
-- [ ] Najít / vyrobit první tileset (placeholder — Kenney isometric set, nebo přiložený `Isometric_tileset.zip` ve workdir, nebo AI generated). **Top-down assety nepoužitelné.**
-- [ ] V `client/public/maps/` uložit `test_50x50.tmj` (Tiled JSON export, isometric) + tileset PNG
-- [ ] V `WorldScene.preload()` načíst mapu + tileset
-- [ ] V `WorldScene.create()` vytvořit Phaser Tilemap (`orientation: ISOMETRIC`), render terrain layer
-- [ ] Načíst placeholder character sprite (4 směry pro iso kompas), render na startovní pozici
-- [ ] Camera follow (`this.cameras.main.startFollow(player)`) — operuje na screen coords po projekci
-- [ ] Phaser Scale.RESIZE responsivně reaguje na resize okna
-- [ ] **Demo:** isometric mapa + statická postava uprostřed, zoom OK na desktop i na mobil
+- [x] Implementovat `client/src/render/projection.ts` — `worldToScreen(x, y)` a `screenToWorld(sx, sy)` per ADR-018
+- [x] Implementovat `client/src/render/ysort.ts` — helper pro depth-by-y sprite sort
+- [x] Vytvořit **Tiled** test mapu 50×50 dlaždic, **isometric orientation, 64×32 px tile footprint**
+- [x] Najít / vyrobit první tileset (placeholder — Kenney isometric set, nebo přiložený `Isometric_tileset.zip` ve workdir, nebo AI generated). **Top-down assety nepoužitelné.** *(PIL-generated 3-tile placeholder: grass, dirt path, water)*
+- [x] V `client/public/maps/` uložit `test_50x50.tmj` (Tiled JSON export, isometric) + tileset PNG
+- [x] V `WorldScene.preload()` načíst mapu + tileset
+- [x] V `WorldScene.create()` vytvořit Phaser Tilemap (`orientation: ISOMETRIC`), render terrain layer
+- [x] Načíst placeholder character sprite (4 směry pro iso kompas), render na startovní pozici
+- [x] Camera follow (`this.cameras.main.startFollow(player)`) — operuje na screen coords po projekci
+- [x] Phaser Scale.RESIZE responsivně reaguje na resize okna
+- [x] **Demo:** isometric mapa + statická postava uprostřed, zoom OK na desktop i na mobil
 
 ---
 
@@ -424,4 +424,5 @@ Tyhle chuti tě budou pokoušet. Odolávej.
 - **2026-05-03** — **Phase 0 dokončena** (PR #1). Lokální stack běží: Postgres 16 + Nakama 3.24 v Dockeru, klient přes Vite dev server na :5173, runtime modul načten z `server/dist/index.js`.
 - **2026-05-03** — **Phase 1 dokončena** (PR #2 + PR #4). Persistentní guest auth přes `authenticateDevice` + WebSocket session, `device_id` v `localStorage`, Boot → Login → World scene flow s funkčním error retry. Login screen má placeholder buttony pro Discord / Google / E-mail (Phase 19). Na okraj přidán **ADR-018 — isometric rendering kontrakt** (PR #3): drift fix vůči [01 Scope](01-scope-and-pillars.md), explicitní lock 2:1 dimetric projekce + Y-sort konvence pro Phase 3+.
 - **2026-05-03** — **Phase 2 dokončena**. Server: `rpc.profile.create_character` (validace username regex + unikátnost, display_name UTF-8 length, gender enum, appearance 0–11 ranges; init Player + 4 atributy + 17 skillů + 24-slot inventory + 11-slot equipment ve třech Storage kolekcích) a `rpc.profile.get_self` (kompletní player state nebo `{exists:false}`). Klient: `CharacterCreationScene` (text-mode form, Tab/šipky/Enter), Boot → Login → CharCreate / WorldScene routing podle existence postavy, `client.rpc` HTTP wrapper v [client/src/rpc.ts](../client/src/rpc.ts). Demo ověřeno přes Playwright: 3 postavy v DB s plnými bloby ve všech kolekcích, re-login po reload trefí WorldScene přímo.
+- **2026-05-03** — **Phase 3 dokončena**. Klient: `client/src/render/projection.ts` (worldToScreen / screenToWorld / screenToTile, 2:1 dimetric per ADR-018, `TILE_W_PX=64` / `TILE_H_PX=32`), `client/src/render/ysort.ts` (depth bandy: terrain 0–999, props 1000–9999, dynamic 10000+ s per-tile Y_SCALE pro sub-tile řazení). Test mapa `client/public/maps/test_50x50.tmj` (50×50, isometric orientation, grass/dirt-crossroads/water patch) + placeholder tileset `placeholder_iso_tileset.png` + 4-směr character spritesheet `client/public/sprites/placeholder_character.png` (SE/SW/NW/NE, 32×48 / frame). `WorldScene` načítá mapu, vytváří `Phaser.Tilemap` (auto-detected iso orientation z .tmj), renderuje terrain layer, spawnuje postavu na `current_position` (anchor 0.5, 1 → feet v diamond centru) s `depthForDynamic(world_y)`, camera follow s bounds podle map extents, HUD s display_name + zone + tile coords. Default spawn `DEFAULT_SPAWN_POSITION` posunut z (50,50) na (25,25) — crossroads test mapy. Smoke test ověřen v Playwright (desktop 1374×729 + mobile 480×640, fresh + re-login flow, 0 console errors).
 - **2026-05-03** — **Nakama upgrade 3.24.0 → 3.38.0**. Po dotazu uživatele jsem dohledal, že 3.24.0 + 3.24.1 mají bug způsobující `400 "RPC ID must be set"` na všechny HTTP `/v2/rpc/{id}` calls (fix v 3.24.2, viz [forum thread](https://forum.heroiclabs.com/t/nakama-upgrade-3-24-1-then-error-rpc-id-must-be-set-message-rpc-id-must-be-set-code-3/5725)). Bumpli jsme rovnou na latest stable 3.38.0, abychom v MVP fázi měli aktuální stack. `nakama-runtime` v1.45.0 (server-side TS API) je s 3.38.0 kompatibilní bez změn. Klientský `callRpc` helper se vrátil z dočasného `socket.rpc` workaroundu na čistý `client.rpc` HTTP.

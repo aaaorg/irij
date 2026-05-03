@@ -32,4 +32,13 @@ export default defineConfig({
     target: 'es2022',
     sourcemap: true,
   },
+  // irij-shared je workspace TS source (package "main": "./src/index.ts").
+  // Defaultně by ho Vite pre-bundloval esbuildem do node_modules/.vite/deps —
+  // při HMR shared modulu se pak pre-bundled snapshot a re-transformované
+  // moduly rozejdou v listu pojmenovaných exportů, prohlížeč dostane
+  // "does not provide an export named X" i když export reálně existuje.
+  // Excludneme shared z optimizeDeps a Vite ho serviruje jako čistý zdroj.
+  optimizeDeps: {
+    exclude: ['irij-shared'],
+  },
 });
