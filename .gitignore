@@ -40,5 +40,9 @@ coverage/
 # Asset working files (raw before processing)
 client/public/assets/raw/
 
+# Reference asset packs (3rd party, držíme jen lokálně — viz docs/04 ADR-018)
+*_tileset.zip
+Isometric_tileset/
+
 # Claude
 .claude/settings.local.json

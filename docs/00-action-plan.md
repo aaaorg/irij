@@ -83,17 +83,19 @@ Cíl: nový hráč si vytvoří postavu (jméno, gender, appearance), persistova
 
 ## Phase 3 — Statická mapa ⏱ ~3-4 dny
 
-Cíl: render základní mapy v Phaseru, hráč vidí svou postavu (bez pohybu).
+Cíl: render základní mapy v Phaseru, hráč vidí svou postavu (bez pohybu). **Isometric** (2:1 dimetric, viz [docs/04 ADR-018](04-tech-adr.md#adr-018-isometric-rendering--explicitní-engineering-kontrakt)).
 
-- [ ] Stáhnout / vytvořit **Tiled** test mapu 50×50 dlaždic, 48×48 px tiles
-- [ ] Najít / vyrobit první tileset (placeholder — třeba [Kenney's Tiny Town](https://kenney.nl/assets) nebo AI generated)
-- [ ] V `client/public/maps/` uložit `test_50x50.tmj` (Tiled JSON export) + tileset PNG
+- [ ] Implementovat `client/src/render/projection.ts` — `worldToScreen(x, y)` a `screenToWorld(sx, sy)` per ADR-018
+- [ ] Implementovat `client/src/render/ysort.ts` — helper pro depth-by-y sprite sort
+- [ ] Vytvořit **Tiled** test mapu 50×50 dlaždic, **isometric orientation, 64×32 px tile footprint**
+- [ ] Najít / vyrobit první tileset (placeholder — Kenney isometric set, nebo přiložený `Isometric_tileset.zip` ve workdir, nebo AI generated). **Top-down assety nepoužitelné.**
+- [ ] V `client/public/maps/` uložit `test_50x50.tmj` (Tiled JSON export, isometric) + tileset PNG
 - [ ] V `WorldScene.preload()` načíst mapu + tileset
-- [ ] V `WorldScene.create()` vytvořit Phaser Tilemap, render terrain layer
-- [ ] Načíst placeholder character sprite, render na startovní pozici
-- [ ] Camera follow (`this.cameras.main.startFollow(player)`)
+- [ ] V `WorldScene.create()` vytvořit Phaser Tilemap (`orientation: ISOMETRIC`), render terrain layer
+- [ ] Načíst placeholder character sprite (4 směry pro iso kompas), render na startovní pozici
+- [ ] Camera follow (`this.cameras.main.startFollow(player)`) — operuje na screen coords po projekci
 - [ ] Phaser Scale.RESIZE responsivně reaguje na resize okna
-- [ ] **Demo:** mapa + statická postava uprostřed, zoom OK na desktop i na mobil
+- [ ] **Demo:** isometric mapa + statická postava uprostřed, zoom OK na desktop i na mobil
 
 ---
 
