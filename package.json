@@ -1,0 +1,27 @@
+{
+  "name": "irij",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Browser MMORPG ve světě slovanského folklóru.",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:client": "pnpm --filter irij-client dev",
+    "build:client": "pnpm --filter irij-client build",
+    "build:server": "pnpm --filter irij-server build",
+    "build:shared": "pnpm --filter irij-shared build",
+    "build": "pnpm build:shared && pnpm build:server && pnpm build:client",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

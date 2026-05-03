@@ -1,0 +1,9 @@
+Static catalog data goes here:
+- items.json
+- recipes.json
+- mobs.json
+- npcs.json
+- dialogs/*.json
+- quests.json
+- job_board_templates.json
+- maps/*.json

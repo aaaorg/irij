@@ -1,0 +1,49 @@
+# Lokální dev stack — Postgres + Nakama
+# `pnpm infra:up` spustí, `pnpm infra:down` zastaví.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nakama']
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+  nakama:
+    image: heroiclabs/nakama:3.24.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NAKAMA_DATABASE_ADDRESS: nakama:localdev@postgres:5432/nakama
+    entrypoint:
+      - /bin/sh
+      - -ecx
+      - >
+        /nakama/nakama migrate up --database.address postgres://nakama:localdev@postgres:5432/nakama &&
+        exec /nakama/nakama
+        --name nakama-local
+        --database.address postgres://nakama:localdev@postgres:5432/nakama
+        --logger.level DEBUG
+        --session.token_expiry_sec 7200
+        --runtime.path /nakama/data/modules
+        --config /nakama/data/local.yml
+    volumes:
+      - ../server/dist:/nakama/data/modules:ro
+      - ./nakama/local.yml:/nakama/data/local.yml:ro
+    ports:
+      - '7349:7349' # gRPC
+      - '7350:7350' # HTTP/WebSocket API
+      - '7351:7351' # Console UI
+
+volumes:
+  postgres-data:

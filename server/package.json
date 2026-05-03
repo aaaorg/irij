@@ -1,0 +1,19 @@
+{
+  "name": "irij-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "typecheck": "tsc --noEmit",
+    "watch": "node build.js --watch"
+  },
+  "dependencies": {
+    "irij-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "nakama-runtime": "^1.32.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,44 @@
+# Node
+node_modules/
+.pnpm-store/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Local infra state
+infra/data/
+infra/postgres-data/
+infra/nakama-data/
+
+# Coverage / testing
+coverage/
+.nyc_output/
+
+# Asset working files (raw before processing)
+client/public/assets/raw/
+
+# Claude
+.claude/settings.local.json

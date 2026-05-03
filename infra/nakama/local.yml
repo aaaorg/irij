@@ -1,0 +1,23 @@
+# Lokální dev konfigurace Nakamy.
+# Production konfigurace bude v separátním souboru.
+
+name: irij-local
+data_dir: /nakama/data
+
+logger:
+  level: DEBUG
+
+console:
+  username: admin
+  password: password
+
+session:
+  encryption_key: 'localdev-encryption-key-change-in-prod-32ch'
+  refresh_encryption_key: 'localdev-refresh-key-change-in-prod-32ch!'
+  token_expiry_sec: 7200
+
+socket:
+  server_key: 'irij-local-server-key'
+
+runtime:
+  js_entrypoint: 'index.js'
