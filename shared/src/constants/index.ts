@@ -75,8 +75,10 @@ export const EQUIPMENT_SLOTS = [
   'shield', 'legs', 'gloves', 'boots', 'ring', 'holster',
 ] as const;
 
-// Spawn defaults pro nově vytvořené postavy (Phase 2 placeholder, Phase 3+ ladí podle mapy).
+// Spawn defaults pro nově vytvořené postavy. Hodnota odpovídá crossroads
+// dirt cesty na Phase 3 test mapě (50×50 isometric); finální mapa Blatin
+// v Phase 18 bude mít vlastní spawn point.
 export const DEFAULT_SPAWN_ZONE = 'blatiny';
-export const DEFAULT_SPAWN_POSITION = { x: 50, y: 50 } as const;
+export const DEFAULT_SPAWN_POSITION = { x: 25, y: 25 } as const;
 export const DEFAULT_HP = 10;
 export const DEFAULT_MANA = 0;
