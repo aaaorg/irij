@@ -10,7 +10,7 @@
 
 ## Sekce A — Operational safety net (před Phase 5)
 
-### A1 — CI: typecheck + build + test gate na PR (P0)
+### A1 — CI: typecheck + build + test gate na PR (P0) ✅ PR #16
 
 - **Source:** Engineering Director, DevOps, QA, Tech Lead.
 - **Why:** Repo už persistuje hráče, žádný automatický check existuje. Drift mezi `pnpm typecheck` a `pnpm build` se objeví až manuálně. Bez gate na PR squash merge protekne.
@@ -24,7 +24,7 @@
 - **Verify:** otevři dummy PR, oba joby zelené pod 3 min.
 - **Effort:** ~1 h.
 
-### A2 — Vitest skeleton + první test suite na pure utily (P0)
+### A2 — Vitest skeleton + první test suite na pure utily (P0) ✅ PR #17
 
 - **Source:** QA, Tech Lead, Backend.
 - **Why:** `pnpm test` je no-op. Pure utily (`pathfinding`, `walkable`, `parseMoveRequest`, opcode shape) jsou ideální cíl bez Nakama runtime mocku. Bez testů Phase 6+ refactor pathfindingu = playtest ruleta.
@@ -47,7 +47,7 @@
 - **Verify:** `pnpm --filter irij-server test` runs ≥ 20 testů, vše zelené.
 - **Effort:** ~3 h.
 
-### A3 — Backup runbook + restore drill (P0)
+### A3 — Backup runbook + restore drill (P0) ✅ PR #19
 
 - **Source:** Engineering Director, DB Architect, DevOps, Nakama specialist.
 - **Why:** Repo persistuje hráče (Nakama Storage je v Postgres). Phase 21 je pozdě — alpha test s kámoši (Phase 22) bez ověřeného backupu = single point of failure pro důvěru.
@@ -62,7 +62,7 @@
 - **Verify:** spusť `restore-drill.sh` lokálně, zkontroluj exit 0 + log čistý.
 - **Effort:** ~4 h (vč. setup off-site target + první test run).
 
-### A4 — Secrets hygiene + prod template (P0)
+### A4 — Secrets hygiene + prod template (P0) ✅ PR #18
 
 - **Source:** Security, Nakama, DevOps.
 - **Why:** `infra/nakama/local.yml` má plaintext `console.password: password`, `session.encryption_key`, `socket.server_key` v repu. `local.yml` neobsahuje nic, co by bránilo deploy do prod. Hardcoded vzor = footgun.
@@ -82,7 +82,7 @@
 - **Verify:** `pnpm build:server && pnpm infra:up` stále jede (lokál čte `local.dev.yml`); `git status` ukazuje `.env` jako ignorovaný.
 - **Effort:** ~2 h.
 
-### A5 — Audit log foundation (P0 → P1)
+### A5 — Audit log foundation (P0 → P1) ✅ PR #20
 
 - **Source:** Security, DB Architect.
 - **Why:** ADR-012 bod 5 ("audit log do Postgres") neimplementovaný. Login, char creation, MOVE_REJECTED s podezřelým patternem nikde nejsou persistentně. Phase 19 (auth providers) potřebuje ten log.
@@ -99,7 +99,7 @@
 - **Verify:** vyrob 3 char accounty, zkontroluj `SELECT count(*) FROM irij.audit_log WHERE event='character_created'` = 3.
 - **Effort:** ~3 h (vč. migration A4 dependency).
 
-### A6 — Real-browser smoke skript formalizovaný (P1)
+### A6 — Real-browser smoke skript formalizovaný (P1) ✅ PR #21
 
 - **Source:** QA.
 - **Why:** Manuální Playwright smoke per CLAUDE.md `feedback_real_browser_verification.md` přestane škálovat v Phase 6+. Formalizuj do skriptu.
@@ -149,7 +149,7 @@
 - **Verify:** create char, check obě collections existují s `version`.
 - **Effort:** ~2 h. (lze sloučit s implementací Phase 5)
 
-### B3 — První PG migrace + golang-migrate runner (P0/P1)
+### B3 — První PG migrace + golang-migrate runner (P0/P1) ✅ PR #20 (s A5)
 
 - **Source:** DB Architect, DevOps.
 - **Why:** `migrations/` je prázdný adresář. Phase 6+ (mob spawns, listings, audit log) potřebuje PG tabulky. Bez konvence ad-hoc spaghetti.
