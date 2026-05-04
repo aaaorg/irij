@@ -54,11 +54,25 @@ import {
 } from './state.js';
 import { isInBounds, isWalkable, nearestWalkable } from './walkable.js';
 
-const RATE_LIMIT_WINDOW_MS = 1000;
-const RATE_LIMIT_MAX_REQUESTS = 10;
+export const RATE_LIMIT_WINDOW_MS = 1000;
+export const RATE_LIMIT_MAX_REQUESTS = 10;
 
-// Validate raw decoded JSON proti MoveRequest shape. Vrací parsed nebo null.
-function parseMoveRequest(raw: unknown): MoveRequest | null {
+export function checkRateLimit(
+  log: number[],
+  nowMs: number,
+  windowMs: number,
+  maxRequests: number,
+): { allowed: boolean; updatedLog: number[] } {
+  const cutoff = nowMs - windowMs;
+  const trimmed = log.filter((t) => t > cutoff);
+  if (trimmed.length >= maxRequests) {
+    return { allowed: false, updatedLog: trimmed };
+  }
+  trimmed.push(nowMs);
+  return { allowed: true, updatedLog: trimmed };
+}
+
+export function parseMoveRequest(raw: unknown): MoveRequest | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
   const target = obj.target;
@@ -140,16 +154,12 @@ export function handleMoveRequest(
 
   // 2) Rate limit (sliding window 1s, max 10).
   const nowMs = Date.now();
-  const cutoff = nowMs - RATE_LIMIT_WINDOW_MS;
   const prevLog = state.moveRequestLog[userId] ?? [];
-  const trimmed = prevLog.filter((t) => t > cutoff);
-  if (trimmed.length >= RATE_LIMIT_MAX_REQUESTS) {
-    // Save trimmed back so window stays current; reject.
-    state.moveRequestLog = { ...state.moveRequestLog, [userId]: trimmed };
+  const rl = checkRateLimit(prevLog, nowMs, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_REQUESTS);
+  state.moveRequestLog = { ...state.moveRequestLog, [userId]: rl.updatedLog };
+  if (!rl.allowed) {
     return { ok: false, reason: 'rate_limited', clientSeq: req.client_seq };
   }
-  trimmed.push(nowMs);
-  state.moveRequestLog = { ...state.moveRequestLog, [userId]: trimmed };
 
   // 3) Stunned — TODO Phase 6 (combat status effects).
 
