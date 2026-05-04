@@ -122,9 +122,10 @@
 - **Redis pro hot data** — overkill pro 100 CCU, přidá pohyb component
 
 **Důsledky:**
-- Nakama interně používá Postgres (CockroachDB volitelně) — připojíme se na _ten samý_ Postgres ve vlastním schématu
-- Schema migration: `golang-migrate` v separátním adresáři `migrations/`
-- Backup strategy: pg_dump cron job
+- Nakama interně používá Postgres (CockroachDB volitelně) — připojíme se na _ten samý_ Postgres ve vlastním schématu `irij`
+- Schema migration: `golang-migrate` (Docker image `migrate/migrate:latest`) jako sidecar service v `infra/docker-compose.yml` — spouští se automaticky před Nakama startem, mount `./migrations:/migrations:ro`. Migrační soubory: `NNNN_popis.up.sql` + `NNNN_popis.down.sql` v `migrations/`.
+- Aktuální migrace: `0001_init_irij_schema` (CREATE SCHEMA irij), `0002_audit_log` (partitioned table `irij.audit_log` s indexy na event a user_id)
+- Backup strategy: `infra/scripts/backup.sh` (pg_dump custom format, 4×/den cron, 7-den retence) + `infra/scripts/restore-drill.sh` (měsíční drill). Viz [docs/06-ops-runbooks.md](06-ops-runbooks.md).
 
 ---
 
@@ -410,6 +411,8 @@ irij/
 
 **MVP scope:** základní validace + audit log. Sofistikované detekční algoritmy (machine learning bot detection, behavioral signatures) = post-MVP, jen pokud problém vznikne.
 
+**Audit log implementace (Phase 4.5, A5):** Postgres tabulka `irij.audit_log` (partitioned by month, indexy na `event` a `user_id`). Helper `server/src/lib/audit.ts` → `logAudit(nk, event, {userId, ip, payload})` s INSERT přes `nk.sqlExec`. Aktuální callsite: `character_created` (profile RPC), `move_rejected` s reason `out_of_bounds` a `too_far` (movement handler, 100 %). Failure silently caught — audit nesmí blokovat game flow.
+
 ---
 
 ## ADR-013: Mobile / PWA strategie
@@ -662,14 +665,17 @@ Phase 0 + 1 jsou nedotčené (pure connect, žádný render). Náklady jsou tedy
 
 ## ADR-017: Test strategy
 
-**Status:** Proposed
+**Status:** Accepted (Phase 4.5, implementováno)
 
-**MVP:** **Unit testy pro server logic** (combat formulas, recipes, validations). Klient testy ne (Phaser je interactive, ROI nízký).
+**MVP:** **Unit testy pro server logic** (combat formulas, recipes, validations). Klient testy ne (Phaser je interactive, ROI nízký). **Smoke test** pro golden path přes Playwright.
 
 **Stack:**
-- Vitest pro unit testy (TS-friendly, rychlý)
-- Postgres test container pro integration testy server logic
-- **No e2e** v MVP — manual playtesting
+- **Vitest ^4** pro unit testy server-side (TS-friendly, rychlý) — `server/vitest.config.ts`, `pnpm --filter irij-server test`
+- **@playwright/test** pro E2E golden path smoke (`client/tests/smoke/golden-path.spec.ts`) — `pnpm --filter irij-client smoke`
+- **GitHub Actions CI** (`ci.yml`) — typecheck + build + test gate na PR + push do main
+- Postgres test container pro integration testy server logic (budoucí)
+
+**Aktuální pokrytí (Phase 4.5):** 47 unit testů — pathfinding (A* happy path, corner cutting, maxPath cap, unreachable), walkable (maskFromTiledMap, isInBounds, nearestWalkable BFS), movement (parseMoveRequest shape validation, checkRateLimit sliding window). Playwright: golden path Boot → login → char create → WorldScene → click-to-move → zero console errors.
 
 **Code coverage:** žádný hard target; pokrýt _pravidla_ z constraints sekcí (02a-e), aby regrese rozhodnutí byly chyceny.
 
@@ -719,3 +725,4 @@ Tyto se vyřeší při skutečném provisioningu, ne v designu:
 - **2026-05-03** — Draft 1.4: přidán ADR-019 (ENTITY_MOVED = path-based broadcast). Phase 4 follow-up po user-reported trhaném pohybu („1 → 2, pauza, 2 → 3, pauza"); per-tile broadcast (4b) měl jitter 300–400 ms ze server tick rounding. ADR-019 přepíná protokol na single broadcast s celou path (RuneScape/Tibia model), klient lokálně lerpuje plynule. ADR-007 tickrate tabulka updatovaná.
 - **2026-05-03** — Draft 1.5: ADR-019 doplněn o **klient deterministic update-loop** (místo Phaser TweenChain). User-reported drift po alt-tab: Phaser tweens jedou přes `requestAnimationFrame`, browser ho v hidden tabu pause-uje, sprite po návratu do tabu pokračoval od starého stavu místo current server position. Fix: klient drží wall-clock baseline (`Date.now()`) a v scene `update()` každý frame deterministic-ky recomputuje sprite pozici z elapsed × speed_tps. Self-correcting bez Page Visibility API — tab return = první update spočítá correct pozici a sprite skočí/lerpne na ni.
 - **2026-05-03** — Draft 1.6: přidán ADR-020 (8-směrový pohyb, octile A*). User-reported zubatý pohyb v iso projekci — cesta po crossroads jela schodovitě N-E-N-E místo přímé NE-NE. Phase 4 pathfinding byl 4-směrový (Manhattan heuristika) bez technického důvodu krom „matchne iso aesthetic" — naopak iso projekce zve k diagonálům. ADR-020 přepíná na 8-směrový A* (cardinal + diagonal, octile cost √2 pro diagonal, no-corner-cutting), 8-směrové nearest-walkable BFS. Klient bez změny (lerp je směrově agnostický). ADR-018 sprite směry update na 8 (cíl), Phase 4c MVP stále 1-frame static. Code: [pathfinding.ts](../server/src/match/pathfinding.ts), [walkable.ts](../server/src/match/walkable.ts).
+- **2026-05-04** — Draft 1.7 (Phase 4.5 operational hardening): ADR-004 doplněn o `irij` schema, golang-migrate Docker sidecar, aktuální migrace (0001+0002), backup skripty + runbook reference. ADR-012 doplněn o implementační detail audit logu (`irij.audit_log` partitioned table, `logAudit` helper, callsite character_created + move_rejected). ADR-017 status Proposed → Accepted, doplněn Vitest (47 testů), Playwright smoke, GitHub Actions CI.

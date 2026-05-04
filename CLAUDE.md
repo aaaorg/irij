@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Irij** — browser MMORPG ve světě slovanského folklóru. Tick-based, 2D pixel art, **isometrický pohled** (2:1 dimetric, viz [docs/04 ADR-018](docs/04-tech-adr.md#adr-018-isometric-rendering--explicitní-engineering-kontrakt)). Phaser klient + Nakama server, sólo dev s AI asistencí. Cíl: ~100 CCU, EU latence, self-hostable.
 
-**Stav:** Phase 0 ✓ (lokální stack běží), Phase 1 ✓ (guest auth + Boot → Login → World scene flow), Phase 2 ✓ (character creation — `rpc.profile.create_character` + `rpc.profile.get_self`, validace, init Player/Skills/Inventory blobů, klient CharacterCreationScene), Phase 3 ✓ (isometric mapa 50×50 + render projection/ysort util per ADR-018, postava se renderuje na crossroads (25,25) s camera follow, Phaser Scale.RESIZE), Phase 4 ✓ (server-authoritative movement — match join + presences + walkable mask, MOVE_REQUEST → A* + nearest-walkable BFS fallback → ENTITY_MOVED broadcast 10 Hz, klient click-to-move + 100 ms tween interpolace + render ostatních hráčů z WORLD_SNAPSHOT/ENTITY_SPAWNED/DESPAWNED, MOVE_REJECTED toast). Další: **Phase 5** (persistence — autosave každých 30 s + spawn-na-poslední-pozici po re-login) — viz [docs/00-action-plan.md](docs/00-action-plan.md). Většina RPC mimo profile / world.find_or_create_match je stále TODO scaffolding.
+**Stav:** Phase 0 ✓ (lokální stack běží), Phase 1 ✓ (guest auth + Boot → Login → World scene flow), Phase 2 ✓ (character creation — `rpc.profile.create_character` + `rpc.profile.get_self`, validace, init Player/Skills/Inventory blobů, klient CharacterCreationScene), Phase 3 ✓ (isometric mapa 50×50 + render projection/ysort util per ADR-018, postava se renderuje na crossroads (25,25) s camera follow, Phaser Scale.RESIZE), Phase 4 ✓ (server-authoritative movement — match join + presences + walkable mask, MOVE_REQUEST → A* + nearest-walkable BFS fallback → ENTITY_MOVED broadcast 10 Hz, klient click-to-move + 100 ms tween interpolace + render ostatních hráčů z WORLD_SNAPSHOT/ENTITY_SPAWNED/DESPAWNED, MOVE_REJECTED toast), **Phase 4.5 ✓** (operational hardening — CI workflow GitHub Actions, Vitest 47 testů na pathfinding/walkable/movement, secrets hygiene `local.dev.yml` + prod template, backup/restore skripty + runbook, audit log foundation `irij.audit_log` + golang-migrate runner, Playwright golden path smoke test). Další: **Phase 5** (persistence — autosave každých 30 s + spawn-na-poslední-pozici po re-login) — viz [docs/00-action-plan.md](docs/00-action-plan.md). Většina RPC mimo profile / world.find_or_create_match je stále TODO scaffolding.
 
 **Render konvence:** logický grid je ortogonální `(x, y)` v tiles — server, pathfinding, collision pracují čistě ve world-space. Isometric je čistě klient render projection (2:1 dimetric, screen footprint 64×32 px, projekce v `client/src/render/projection.ts`, Y-sort depth helper v `client/src/render/ysort.ts` — viz ADR-018). Žádný server kód nesmí pracovat s pixel/screen souřadnicemi.
 
@@ -17,8 +17,8 @@ Monorepo (pnpm workspaces) — tři balíčky a sdílené moduly:
 - [client/](client/) — Phaser 3 + Vite + TypeScript klient, importuje `irij-shared`
 - [server/](server/) — Nakama TypeScript runtime modul, esbuild bundle do IIFE
 - [shared/](shared/) — sdílené types, opcodes, constants. Re-exporty: `irij-shared`, `irij-shared/types`, `irij-shared/messages`, `irij-shared/constants`. Používá `"main": "./src/index.ts"` (žádný build, konzumenti čtou TS přímo)
-- [infra/](infra/) — `docker-compose.yml` (Postgres 16 + Nakama 3.38) a `nakama/local.yml`
-- [migrations/](migrations/) — SQL migrace (golang-migrate, zatím prázdné)
+- [infra/](infra/) — `docker-compose.yml` (Postgres 16 + Nakama 3.38 + golang-migrate sidecar) a `nakama/local.dev.yml`
+- [migrations/](migrations/) — SQL migrace (golang-migrate, `0001_init_irij_schema` + `0002_audit_log`)
 - [docs/](docs/) — designové dokumenty 00–04 a `refs/`. **Vždy je čti, než budeš dělat netriviální změny** — definují data model, message katalog a tech ADRs
 
 ## Klíčové příkazy
@@ -44,7 +44,7 @@ pnpm test                   # rekurzivně (zatím nikde implementováno)
 
 **Důležitá past (z [docs/00-action-plan.md](docs/00-action-plan.md)):** Nakama runtime hledá `index.js` v `/nakama/data/modules`, mountnuto z `server/dist/`. Pokud není buildnutý server **před** `pnpm infra:up`, runtime modul se nezaregistruje. Sekvence: `build:server` → `infra:up`.
 
-Nakama porty: `7349` gRPC, `7350` HTTP/WS API, `7351` console (admin/password z `infra/nakama/local.yml`).
+Nakama porty: `7349` gRPC, `7350` HTTP/WS API, `7351` console (admin/password z `infra/nakama/local.dev.yml`).
 
 ## Architektura — co je nutné znát
 
@@ -128,7 +128,6 @@ Project state je trackovaný v repu (action plan checkboxy + CLAUDE.md Stav line
 
 ## Co v repu zatím **není** (a neměl bys to vymýšlet)
 
-- Žádný lint runner ani test framework — `pnpm lint`/`pnpm test` jsou prázdné scripty.
-- Žádné CI, žádný deployment script.
-- Žádná Postgres migrace ani SQL — `migrations/` je prázdný adresář.
+- Žádný lint runner — `pnpm lint` je prázdný skript.
+- Žádný deployment script (CI workflow pro typecheck + build + test na PR existuje od Phase 4.5).
 - Většina match logiky, RPC a klient scén je TODO scaffolding — nehledej "kde je combat resolver", neexistuje.
