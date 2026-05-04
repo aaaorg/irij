@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS irij.audit_log CASCADE;

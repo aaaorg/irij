@@ -259,7 +259,7 @@ export function matchLeave(
 export function matchLoop(
   _ctx: nkruntime.Context,
   logger: nkruntime.Logger,
-  _nk: nkruntime.Nakama,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   tick: number,
   state: WorldMatchState,
@@ -285,7 +285,7 @@ export function matchLoop(
         for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
         text = s;
       }
-      const result = handleMoveRequest(state, logger, dispatcher, msg.sender, text, tick);
+      const result = handleMoveRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
       if (!result.ok && result.reason) {
         broadcastMoveRejected(dispatcher, msg.sender, result.reason, result.clientSeq);
       }

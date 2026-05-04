@@ -58,6 +58,41 @@ Skript spustí dočasný PG container, restoruje dump, ověří počty řádků 
 
 ---
 
+## Migrations workflow
+
+Migrace běží automaticky při `pnpm infra:up` (sidecar `migrate` service v docker-compose).
+
+### Přidání nové migrace
+
+1. Vytvoř dva soubory v `migrations/`:
+   - `NNNN_popis.up.sql` — forward migration
+   - `NNNN_popis.down.sql` — rollback
+2. Číslování: inkrementuj poslední NNNN (4 digits, zero-padded).
+3. Ověř lokálně: `pnpm infra:down && pnpm infra:up` + `psql` check.
+4. Commitni oba soubory do stejného PR jako kód, který migraci vyžaduje.
+
+### Dry-run check
+
+```bash
+docker run --rm -v $(pwd)/migrations:/migrations \
+  --network host migrate/migrate:latest \
+  -path=/migrations \
+  -database='postgres://nakama:localdev@localhost:5432/nakama?sslmode=disable' \
+  up 1
+```
+
+### Rollback
+
+```bash
+docker run --rm -v $(pwd)/migrations:/migrations \
+  --network host migrate/migrate:latest \
+  -path=/migrations \
+  -database='postgres://nakama:localdev@localhost:5432/nakama?sslmode=disable' \
+  down 1
+```
+
+---
+
 ## Secrets rotation
 
 | Secret | Rotace |
