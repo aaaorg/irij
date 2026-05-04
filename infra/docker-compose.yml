@@ -36,10 +36,10 @@ services:
         --logger.level DEBUG
         --session.token_expiry_sec 7200
         --runtime.path /nakama/data/modules
-        --config /nakama/data/local.yml
+        --config /nakama/data/local.dev.yml
     volumes:
       - ../server/dist:/nakama/data/modules:ro
-      - ./nakama/local.yml:/nakama/data/local.yml:ro
+      - ./nakama/local.dev.yml:/nakama/data/local.dev.yml:ro
     ports:
       - '7349:7349' # gRPC
       - '7350:7350' # HTTP/WebSocket API
