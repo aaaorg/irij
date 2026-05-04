@@ -30,6 +30,7 @@ import type {
   SatchelEntry,
   SkillRow,
 } from 'irij-shared/types';
+import { logAudit } from '../lib/audit.js';
 
 // Storage je owner-readable, server-only writable. Klient čte přes RPC, ne přímo.
 const PERMISSION_OWNER_READ = 1;
@@ -195,6 +196,12 @@ export function profileCreateCharacter(
   ]);
 
   logger.info(`Character created for ${userId} (username=${req.username})`);
+
+  logAudit(nk, 'character_created', {
+    userId,
+    ip: ctx.clientIp,
+    payload: { username: req.username, display_name: req.display_name },
+  });
 
   const response: CreateCharacterResponse = { ok: true, player_id: userId };
   return JSON.stringify(response);

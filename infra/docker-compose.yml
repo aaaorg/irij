@@ -17,12 +17,27 @@ services:
       timeout: 3s
       retries: 5
 
+  migrate:
+    image: migrate/migrate:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../migrations:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://nakama:localdev@postgres:5432/nakama?sslmode=disable
+      - up
+    restart: 'no'
+
   nakama:
     image: heroiclabs/nakama:3.38.0
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       NAKAMA_DATABASE_ADDRESS: nakama:localdev@postgres:5432/nakama
     entrypoint:

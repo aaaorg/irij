@@ -44,6 +44,7 @@ import { Op } from 'irij-shared/messages';
 import type { EntityMoved, MoveRejectReason, MoveRejected, MoveRequest } from 'irij-shared/messages';
 import type { Position } from 'irij-shared/types';
 
+import { logAudit } from '../lib/audit.js';
 import { findPath } from './pathfinding.js';
 import {
   broadcastToChunkArea,
@@ -128,6 +129,7 @@ export function computeCurrentPosition(
 export function handleMoveRequest(
   state: WorldMatchState,
   logger: nkruntime.Logger,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   presence: nkruntime.Presence,
   rawData: string,
@@ -168,6 +170,10 @@ export function handleMoveRequest(
     logger.info(
       `move rejected userId=${userId.slice(0, 8)} reason=out_of_bounds target=(${req.target.x},${req.target.y})`,
     );
+    logAudit(nk, 'move_rejected', {
+      userId,
+      payload: { reason: 'out_of_bounds', target: req.target },
+    });
     return { ok: false, reason: 'out_of_bounds', clientSeq: req.client_seq };
   }
 
@@ -200,6 +206,10 @@ export function handleMoveRequest(
     logger.info(
       `move rejected userId=${userId.slice(0, 8)} reason=too_far from=(${fromPos.x},${fromPos.y}) target=(${effectiveTarget.x},${effectiveTarget.y})`,
     );
+    logAudit(nk, 'move_rejected', {
+      userId,
+      payload: { reason: 'too_far', from: fromPos, target: effectiveTarget },
+    });
     return { ok: false, reason: 'too_far', clientSeq: req.client_seq };
   }
   if (path.length === 0) {
