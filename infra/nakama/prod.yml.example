@@ -1,0 +1,23 @@
+# Production Nakama konfigurace — kopíruj jako prod.yml a vyplň env vars.
+# Nakama podporuje ${ENV_VAR} substitution v YAML config souborech.
+
+name: irij-prod
+data_dir: /nakama/data
+
+logger:
+  level: WARN
+
+console:
+  username: ${NAKAMA_CONSOLE_USERNAME}
+  password: ${NAKAMA_CONSOLE_PASSWORD}
+
+session:
+  encryption_key: ${NAKAMA_SESSION_ENCRYPTION_KEY}
+  refresh_encryption_key: ${NAKAMA_SESSION_REFRESH_ENCRYPTION_KEY}
+  token_expiry_sec: 3600
+
+socket:
+  server_key: ${NAKAMA_SERVER_KEY}
+
+runtime:
+  js_entrypoint: 'index.js'

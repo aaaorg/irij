@@ -27,6 +27,8 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+infra/.env
+infra/nakama/prod.yml
 
 # Local infra state
 infra/data/
