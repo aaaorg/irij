@@ -49,5 +49,7 @@ Isometric_tileset/
 # Claude
 .claude/settings.local.json
 
-# Playwright MCP
+# Playwright
 .playwright-mcp/
+test-results/
+playwright-report/
