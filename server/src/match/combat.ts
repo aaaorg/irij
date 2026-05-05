@@ -46,6 +46,14 @@ export function chebyshevDistance(a: Position, b: Position): number {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 }
 
+export function manhattanDistance(a: Position, b: Position): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+export function isMeleeAdjacent(a: Position, b: Position): boolean {
+  return manhattanDistance(a, b) === 1;
+}
+
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -86,11 +94,10 @@ export function handleAttackRequest(
     return;
   }
 
-  const dist = chebyshevDistance(ps.position, mob.position);
-  if (dist === 0 || dist > MELEE_RANGE_TILES) {
-    log(logger, 'debug', 'attack rejected: out of range', {
+  if (!isMeleeAdjacent(ps.position, mob.position)) {
+    log(logger, 'debug', 'attack rejected: not cardinal adjacent', {
       userId: userId.slice(0, 8),
-      dist,
+      manhattan: manhattanDistance(ps.position, mob.position),
     });
     return;
   }
@@ -137,8 +144,7 @@ function resolvePlayerAttacks(
       continue;
     }
 
-    const dist = chebyshevDistance(ps.position, mob.position);
-    if (dist === 0 || dist > MELEE_RANGE_TILES) {
+    if (!isMeleeAdjacent(ps.position, mob.position)) {
       state.combatEngagements = { ...state.combatEngagements, [userId]: null };
       continue;
     }
@@ -207,8 +213,7 @@ function resolveMobAttacks(
     const def = state.mobDefinitions[mob.mobId];
     if (!def) continue;
 
-    const dist = chebyshevDistance(mob.position, target.position);
-    if (dist === 0 || dist > def.stats.range_tiles) continue;
+    if (!isMeleeAdjacent(mob.position, target.position)) continue;
 
     const baseDamage = randomInt(def.stats.damage_min, def.stats.damage_max);
     const hitRoll = randomInt(0, 99);

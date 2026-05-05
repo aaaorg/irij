@@ -481,13 +481,11 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    const dist = Math.max(
-      Math.abs(this.selfTilePosition.x - mobPos.x),
-      Math.abs(this.selfTilePosition.y - mobPos.y),
-    );
+    const manhattanDist =
+      Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y);
 
-    if (dist === 1) {
-      // In range — attack
+    if (manhattanDist === 1) {
+      // In range (cardinal adjacent) — attack
       this.pendingAttackTarget = null;
       this.clientSeq += 1;
       const payload = JSON.stringify({
@@ -719,14 +717,11 @@ export class WorldScene extends Phaser.Scene {
     const targetMobId = this.findMobAtTile(tile.x, tile.y);
     if (targetMobId) {
       const mobPos = this.entityTilePositions.get(targetMobId);
-      const dist = mobPos
-        ? Math.max(
-            Math.abs(this.selfTilePosition.x - mobPos.x),
-            Math.abs(this.selfTilePosition.y - mobPos.y),
-          )
+      const manhattanDist = mobPos
+        ? Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y)
         : Infinity;
 
-      if (dist === 1) {
+      if (manhattanDist === 1) {
         // In range (adjacent) — attack immediately
         this.pendingAttackTarget = null;
         this.clientSeq += 1;
@@ -774,19 +769,15 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private findBestAdjacentTile(mobPos: Position): Position {
-    const offsets = [
+    const cardinalOffsets = [
       { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 },
-      { x: -1, y: -1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: 1, y: 1 },
     ];
     let best = { x: mobPos.x, y: mobPos.y - 1 };
     let bestDist = Infinity;
-    for (const off of offsets) {
+    for (const off of cardinalOffsets) {
       const tx = mobPos.x + off.x;
       const ty = mobPos.y + off.y;
-      const dist = Math.max(
-        Math.abs(this.selfTilePosition.x - tx),
-        Math.abs(this.selfTilePosition.y - ty),
-      );
+      const dist = Math.abs(this.selfTilePosition.x - tx) + Math.abs(this.selfTilePosition.y - ty);
       if (dist < bestDist) {
         bestDist = dist;
         best = { x: tx, y: ty };
@@ -798,9 +789,7 @@ export class WorldScene extends Phaser.Scene {
   private findMobAtTile(tileX: number, tileY: number): string | null {
     for (const [entityId, pos] of this.entityTilePositions) {
       if (!this.mobSprites.has(entityId)) continue;
-      if (pos.x === tileX && pos.y === tileY) return entityId;
-      // Also check adjacent tiles for easier targeting
-      if (Math.abs(pos.x - tileX) <= 1 && Math.abs(pos.y - tileY) <= 1) {
+      if (pos.x === tileX && pos.y === tileY) {
         const sprite = this.mobSprites.get(entityId);
         if (sprite && sprite.active && sprite.alpha > 0) return entityId;
       }

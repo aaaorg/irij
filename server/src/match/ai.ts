@@ -4,7 +4,7 @@ import type { EntityMoved, EntitySpawned } from 'irij-shared/messages';
 import type { Position } from 'irij-shared/types';
 
 import { log } from '../lib/log.js';
-import { chebyshevDistance } from './combat.js';
+import { chebyshevDistance, isMeleeAdjacent } from './combat.js';
 import { findPath } from './pathfinding.js';
 import { isWalkable, isInBounds } from './walkable.js';
 import {
@@ -186,10 +186,8 @@ function tickChase(
   }
 
   const def = state.mobDefinitions[mob.mobId];
-  const range = def?.stats.range_tiles ?? 1;
-  const distToTarget = chebyshevDistance(mob.position, target.position);
 
-  if (distToTarget >= 1 && distToTarget <= range) {
+  if (isMeleeAdjacent(mob.position, target.position)) {
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: { ...mob, aiState: 'attack' as const, path: [] },
@@ -247,11 +245,7 @@ function tickAttack(
     return;
   }
 
-  const def = state.mobDefinitions[mob.mobId];
-  const range = def?.stats.range_tiles ?? 1;
-  const dist = chebyshevDistance(mob.position, target.position);
-
-  if (dist === 0 || dist > range) {
+  if (!isMeleeAdjacent(mob.position, target.position)) {
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: { ...mob, aiState: 'chase' as const },
@@ -375,10 +369,8 @@ function parseCk(ck: string): Position {
   return { x: Number(parts[0]) ?? 0, y: Number(parts[1]) ?? 0 };
 }
 
-const ADJACENT_OFFSETS: readonly Position[] = [
-  { x: -1, y: -1 }, { x: 0, y: -1 }, { x: 1, y: -1 },
-  { x: -1, y: 0 },                    { x: 1, y: 0 },
-  { x: -1, y: 1 },  { x: 0, y: 1 },  { x: 1, y: 1 },
+const CARDINAL_OFFSETS: readonly Position[] = [
+  { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 },
 ];
 
 function findAdjacentToTarget(
@@ -389,7 +381,7 @@ function findAdjacentToTarget(
   let bestTile: Position | null = null;
   let bestDist = Infinity;
 
-  for (const off of ADJACENT_OFFSETS) {
+  for (const off of CARDINAL_OFFSETS) {
     const tx = targetPos.x + off.x;
     const ty = targetPos.y + off.y;
     if (!isInBounds(state.walkable, tx, ty)) continue;
