@@ -42,6 +42,13 @@ interface EntityMovementState {
   path: Position[];
   speedTps: number;
   startedAtMs: number;
+  lastTileIdx: number;
+}
+
+interface PendingMove {
+  from: Position;
+  path: Position[];
+  speedTps: number;
 }
 
 interface HpBarState {
@@ -61,6 +68,7 @@ export class WorldScene extends Phaser.Scene {
   private entityMoveStates: Map<string, EntityMovementState> = new Map();
   private hpBars: Map<string, HpBarState> = new Map();
   private entityTilePositions: Map<string, Position> = new Map();
+  private pendingMoves: Map<string, PendingMove> = new Map();
   private clientSeq = 0;
   private rejectToast?: Phaser.GameObjects.Text;
   private pendingAttackTarget: string | null = null;
@@ -196,6 +204,7 @@ export class WorldScene extends Phaser.Scene {
     // when Playwright smoke test or rapid reconnect produces overlapping sessions)
     for (const [id, sprite] of this.otherPlayers) {
       this.entityMoveStates.delete(id);
+      this.pendingMoves.delete(id);
       this.removeHpBar(id);
       this.entityTilePositions.delete(id);
       sprite.destroy();
@@ -390,46 +399,38 @@ export class WorldScene extends Phaser.Scene {
   ): void {
     if (path.length === 0) return;
 
-    // If entity is mid-interpolation, snap to the tile it's currently heading
-    // toward and start new path from there. Prevents visual teleport back to
-    // server's `from` which may differ due to tick vs wall-clock timing.
     const existing = this.entityMoveStates.get(entityId);
-    let effectiveFrom = { x: from.x, y: from.y };
-
-    if (existing) {
-      const now = Date.now();
-      const elapsedMs = now - existing.startedAtMs;
-      const tilesElapsed = (elapsedMs * existing.speedTps) / 1000;
-      const idx = Math.floor(Math.max(0, tilesElapsed));
-
-      if (idx < existing.path.length) {
-        // Mid-path: snap to current target tile
-        const currentTarget = existing.path[idx];
-        if (currentTarget) {
-          effectiveFrom = { x: currentTarget.x, y: currentTarget.y };
-          const sprite = this.getSpriteForEntity(entityId);
-          if (sprite) {
-            const px = this.tileCenterPx(currentTarget);
-            sprite.setPosition(px.x, px.y);
-            sprite.setDepth(depthForDynamic(currentTarget.y));
-          }
-        }
-      } else {
-        // Path finished: use last path tile
-        const last = existing.path[existing.path.length - 1];
-        if (last) effectiveFrom = { x: last.x, y: last.y };
-      }
+    if (existing && existing.path.length > 0) {
+      // Mid-movement: queue as pending. Sprite will finish current tile step
+      // and then splice to this path. Latest pending wins (spam-click safe).
+      this.pendingMoves.set(entityId, {
+        from: { x: from.x, y: from.y },
+        path: path.map((p) => ({ x: p.x, y: p.y })),
+        speedTps,
+      });
+      return;
     }
 
+    // Not moving: start immediately
+    this.applyMovement(entityId, from, path, speedTps);
+  }
+
+  private applyMovement(
+    entityId: string,
+    from: Position,
+    path: Position[],
+    speedTps: number,
+  ): void {
     this.entityMoveStates.set(entityId, {
-      from: effectiveFrom,
+      from: { x: from.x, y: from.y },
       path: path.map((p) => ({ x: p.x, y: p.y })),
       speedTps,
       startedAtMs: Date.now(),
+      lastTileIdx: 0,
     });
-    this.entityTilePositions.set(entityId, { x: effectiveFrom.x, y: effectiveFrom.y });
+    this.entityTilePositions.set(entityId, { x: from.x, y: from.y });
     if (entityId === this.selfUserId) {
-      this.selfTilePosition = { x: effectiveFrom.x, y: effectiveFrom.y };
+      this.selfTilePosition = { x: from.x, y: from.y };
     }
   }
 
@@ -438,18 +439,40 @@ export class WorldScene extends Phaser.Scene {
     const now = Date.now();
     const completed: string[] = [];
 
-    for (const [entityId, state] of this.entityMoveStates) {
+    for (const [entityId, mstate] of this.entityMoveStates) {
       const sprite = this.getSpriteForEntity(entityId);
       if (!sprite) {
         completed.push(entityId);
         continue;
       }
 
-      const elapsedMs = now - state.startedAtMs;
-      const tilesElapsed = (elapsedMs * state.speedTps) / 1000;
+      const elapsedMs = now - mstate.startedAtMs;
+      const tilesElapsed = (elapsedMs * mstate.speedTps) / 1000;
+      const idx = Math.floor(Math.max(0, tilesElapsed));
 
-      if (tilesElapsed >= state.path.length) {
-        const last = state.path[state.path.length - 1];
+      // Tile boundary crossed — check for pending path splice
+      if (idx > mstate.lastTileIdx) {
+        const arrivedTile = mstate.path[idx - 1] ?? mstate.from;
+        this.entityTilePositions.set(entityId, { x: arrivedTile.x, y: arrivedTile.y });
+        if (entityId === this.selfUserId) {
+          this.selfTilePosition = { x: arrivedTile.x, y: arrivedTile.y };
+        }
+        mstate.lastTileIdx = idx;
+
+        const pending = this.pendingMoves.get(entityId);
+        if (pending) {
+          this.pendingMoves.delete(entityId);
+          // Snap sprite to the tile we just arrived at, then start new path
+          const px = this.tileCenterPx(arrivedTile);
+          sprite.setPosition(px.x, px.y);
+          sprite.setDepth(depthForDynamic(arrivedTile.y));
+          this.applyMovement(entityId, arrivedTile, pending.path, pending.speedTps);
+          continue;
+        }
+      }
+
+      if (tilesElapsed >= mstate.path.length) {
+        const last = mstate.path[mstate.path.length - 1];
         if (last) {
           const px = this.tileCenterPx(last);
           sprite.setPosition(px.x, px.y);
@@ -459,14 +482,20 @@ export class WorldScene extends Phaser.Scene {
             this.selfTilePosition = { x: last.x, y: last.y };
           }
         }
+        // Path finished — check for pending before marking complete
+        const pending = this.pendingMoves.get(entityId);
+        if (pending && last) {
+          this.pendingMoves.delete(entityId);
+          this.applyMovement(entityId, last, pending.path, pending.speedTps);
+          continue;
+        }
         completed.push(entityId);
         continue;
       }
 
-      const idx = Math.floor(Math.max(0, tilesElapsed));
       const subTile = tilesElapsed - idx;
-      const startTile = idx === 0 ? state.from : (state.path[idx - 1] ?? state.from);
-      const endTile = state.path[idx];
+      const startTile = idx === 0 ? mstate.from : (mstate.path[idx - 1] ?? mstate.from);
+      const endTile = mstate.path[idx];
       if (!endTile) {
         completed.push(entityId);
         continue;
@@ -480,14 +509,11 @@ export class WorldScene extends Phaser.Scene {
 
       sprite.setPosition(x, y);
       sprite.setDepth(depthForDynamic(lerpedY));
-      this.entityTilePositions.set(entityId, { x: endTile.x, y: endTile.y });
-      if (entityId === this.selfUserId) {
-        this.selfTilePosition = { x: endTile.x, y: endTile.y };
-      }
     }
 
     for (const id of completed) {
       this.entityMoveStates.delete(id);
+      this.pendingMoves.delete(id);
       if (id === this.selfUserId) {
         this.checkPendingAttack();
       }
@@ -922,6 +948,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.tweens.killAll();
     this.entityMoveStates.clear();
+    this.pendingMoves.clear();
     for (const sprite of this.otherPlayers.values()) sprite.destroy();
     this.otherPlayers.clear();
     for (const sprite of this.mobSprites.values()) sprite.destroy();
