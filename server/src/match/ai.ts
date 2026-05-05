@@ -133,6 +133,21 @@ export function advanceMobMovement(
   }
 }
 
+function broadcastMobStop(
+  dispatcher: nkruntime.MatchDispatcher,
+  state: WorldMatchState,
+  mob: MobInstanceState,
+): void {
+  const payload: EntityMoved = {
+    entity_id: mob.instanceId,
+    from: mob.position,
+    path: [],
+    speed_tps: mob.speedTps || 2,
+    started_at_tick: 0,
+  };
+  broadcastToChunkArea(dispatcher, state, mob.lastChunk, Op.ENTITY_MOVED, payload);
+}
+
 function tickIdle(
   state: WorldMatchState,
   _dispatcher: nkruntime.MatchDispatcher,
@@ -164,6 +179,7 @@ function tickChase(
 ): void {
   const target = mob.targetUserId ? state.presencesByUserId[mob.targetUserId] : null;
   if (!target) {
+    broadcastMobStop(dispatcher, state, mob);
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: { ...mob, aiState: 'idle' as const, targetUserId: null, path: [] },
@@ -173,6 +189,7 @@ function tickChase(
 
   const distFromSpawn = chebyshevDistance(mob.position, mob.spawnPosition);
   if (distFromSpawn > mob.leashRadiusTiles) {
+    broadcastMobStop(dispatcher, state, mob);
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: {
@@ -188,6 +205,7 @@ function tickChase(
   const def = state.mobDefinitions[mob.mobId];
 
   if (isMeleeAdjacent(mob.position, target.position)) {
+    broadcastMobStop(dispatcher, state, mob);
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: { ...mob, aiState: 'attack' as const, path: [] },
@@ -281,6 +299,7 @@ function tickLeashReturn(
     if (distFromSpawn + def.aggro_radius_tiles <= mob.leashRadiusTiles) {
       const nearest = findNearestPlayer(state, mob, def.aggro_radius_tiles);
       if (nearest) {
+        broadcastMobStop(dispatcher, state, mob);
         state.mobInstances = {
           ...state.mobInstances,
           [mob.instanceId]: {

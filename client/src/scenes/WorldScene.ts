@@ -45,12 +45,6 @@ interface EntityMovementState {
   lastTileIdx: number;
 }
 
-interface PendingMove {
-  from: Position;
-  path: Position[];
-  speedTps: number;
-}
-
 interface HpBarState {
   bg: Phaser.GameObjects.Rectangle;
   fg: Phaser.GameObjects.Rectangle;
@@ -68,7 +62,6 @@ export class WorldScene extends Phaser.Scene {
   private entityMoveStates: Map<string, EntityMovementState> = new Map();
   private hpBars: Map<string, HpBarState> = new Map();
   private entityTilePositions: Map<string, Position> = new Map();
-  private pendingMoves: Map<string, PendingMove> = new Map();
   private clientSeq = 0;
   private rejectToast?: Phaser.GameObjects.Text;
   private pendingAttackTarget: string | null = null;
@@ -204,7 +197,6 @@ export class WorldScene extends Phaser.Scene {
     // when Playwright smoke test or rapid reconnect produces overlapping sessions)
     for (const [id, sprite] of this.otherPlayers) {
       this.entityMoveStates.delete(id);
-      this.pendingMoves.delete(id);
       this.removeHpBar(id);
       this.entityTilePositions.delete(id);
       sprite.destroy();
@@ -301,8 +293,14 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handleEntityMoved(payload: EntityMoved): void {
-    if (!payload?.entity_id || !payload.from || !Array.isArray(payload.path)) return;
-    if (payload.path.length === 0) return;
+    if (!payload?.entity_id || !payload.from) return;
+
+    // Position correction / stop (empty path) — snap entity to server position
+    if (!Array.isArray(payload.path) || payload.path.length === 0) {
+      this.snapEntityToServerPosition(payload.entity_id, payload.from);
+      return;
+    }
+
     if (typeof payload.speed_tps !== 'number' || payload.speed_tps <= 0) return;
 
     const hasSprite =
@@ -315,6 +313,20 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.startEntityMovement(payload.entity_id, payload.from, payload.path, payload.speed_tps);
+  }
+
+  private snapEntityToServerPosition(entityId: string, pos: Position): void {
+    this.entityMoveStates.delete(entityId);
+    this.entityTilePositions.set(entityId, { x: pos.x, y: pos.y });
+    if (entityId === this.selfUserId) {
+      this.selfTilePosition = { x: pos.x, y: pos.y };
+    }
+    const sprite = this.getSpriteForEntity(entityId);
+    if (sprite) {
+      const px = this.tileCenterPx(pos);
+      sprite.setPosition(px.x, px.y);
+      sprite.setDepth(depthForDynamic(pos.y));
+    }
   }
 
   private handleCombatResolved(payload: CombatResolved): void {
@@ -399,19 +411,16 @@ export class WorldScene extends Phaser.Scene {
   ): void {
     if (path.length === 0) return;
 
-    const existing = this.entityMoveStates.get(entityId);
-    if (existing && existing.path.length > 0) {
-      // Mid-movement: queue as pending. Sprite will finish current tile step
-      // and then splice to this path. Latest pending wins (spam-click safe).
-      this.pendingMoves.set(entityId, {
-        from: { x: from.x, y: from.y },
-        path: path.map((p) => ({ x: p.x, y: p.y })),
-        speedTps,
-      });
-      return;
+    // Always apply immediately — snap to server-authoritative position.
+    // Previous "pending queue" approach caused visual desync because the
+    // client kept animating stale paths while server positions diverged.
+    this.entityMoveStates.delete(entityId);
+    const sprite = this.getSpriteForEntity(entityId);
+    if (sprite) {
+      const px = this.tileCenterPx(from);
+      sprite.setPosition(px.x, px.y);
+      sprite.setDepth(depthForDynamic(from.y));
     }
-
-    // Not moving: start immediately
     this.applyMovement(entityId, from, path, speedTps);
   }
 
@@ -450,7 +459,7 @@ export class WorldScene extends Phaser.Scene {
       const tilesElapsed = (elapsedMs * mstate.speedTps) / 1000;
       const idx = Math.floor(Math.max(0, tilesElapsed));
 
-      // Tile boundary crossed — check for pending path splice
+      // Tile boundary crossed — update tracked tile position
       if (idx > mstate.lastTileIdx) {
         const arrivedTile = mstate.path[idx - 1] ?? mstate.from;
         this.entityTilePositions.set(entityId, { x: arrivedTile.x, y: arrivedTile.y });
@@ -458,17 +467,6 @@ export class WorldScene extends Phaser.Scene {
           this.selfTilePosition = { x: arrivedTile.x, y: arrivedTile.y };
         }
         mstate.lastTileIdx = idx;
-
-        const pending = this.pendingMoves.get(entityId);
-        if (pending) {
-          this.pendingMoves.delete(entityId);
-          // Snap sprite to the tile we just arrived at, then start new path
-          const px = this.tileCenterPx(arrivedTile);
-          sprite.setPosition(px.x, px.y);
-          sprite.setDepth(depthForDynamic(arrivedTile.y));
-          this.applyMovement(entityId, arrivedTile, pending.path, pending.speedTps);
-          continue;
-        }
       }
 
       if (tilesElapsed >= mstate.path.length) {
@@ -481,13 +479,6 @@ export class WorldScene extends Phaser.Scene {
           if (entityId === this.selfUserId) {
             this.selfTilePosition = { x: last.x, y: last.y };
           }
-        }
-        // Path finished — check for pending before marking complete
-        const pending = this.pendingMoves.get(entityId);
-        if (pending && last) {
-          this.pendingMoves.delete(entityId);
-          this.applyMovement(entityId, last, pending.path, pending.speedTps);
-          continue;
         }
         completed.push(entityId);
         continue;
@@ -513,7 +504,6 @@ export class WorldScene extends Phaser.Scene {
 
     for (const id of completed) {
       this.entityMoveStates.delete(id);
-      this.pendingMoves.delete(id);
       if (id === this.selfUserId) {
         this.checkPendingAttack();
       }
@@ -952,7 +942,6 @@ export class WorldScene extends Phaser.Scene {
 
     this.tweens.killAll();
     this.entityMoveStates.clear();
-    this.pendingMoves.clear();
     for (const sprite of this.otherPlayers.values()) sprite.destroy();
     this.otherPlayers.clear();
     for (const sprite of this.mobSprites.values()) sprite.destroy();
