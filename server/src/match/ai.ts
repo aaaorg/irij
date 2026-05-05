@@ -278,6 +278,27 @@ function tickLeashReturn(
     return;
   }
 
+  // Re-aggro if a player entered aggro radius while mob is still within leash zone
+  const def = state.mobDefinitions[mob.mobId];
+  if (def) {
+    const distFromSpawn = chebyshevDistance(mob.position, mob.spawnPosition);
+    if (distFromSpawn <= mob.leashRadiusTiles) {
+      const nearest = findNearestPlayer(state, mob, def.aggro_radius_tiles);
+      if (nearest) {
+        state.mobInstances = {
+          ...state.mobInstances,
+          [mob.instanceId]: {
+            ...mob,
+            aiState: 'chase' as const,
+            targetUserId: nearest,
+            path: [],
+          },
+        };
+        return;
+      }
+    }
+  }
+
   if (mob.path.length > 0) return;
 
   const path = findPath(state.walkable, mob.position, mob.spawnPosition, { maxPathLength: 32 });
@@ -295,8 +316,8 @@ function tickLeashReturn(
     return;
   }
 
-  const def = state.mobDefinitions[mob.mobId];
-  const speedTps = def?.stats.movement_speed_tps ?? 2;
+  const mobDef = state.mobDefinitions[mob.mobId];
+  const speedTps = mobDef?.stats.movement_speed_tps ?? 2;
   state.mobInstances = {
     ...state.mobInstances,
     [mob.instanceId]: {
