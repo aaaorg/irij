@@ -11,6 +11,7 @@ import {
   DEFAULT_HP,
   DEFAULT_SPAWN_POSITION,
   MOVEMENT_SPEED_TPS_BASE,
+  PLAYER_AUTOSAVE_INTERVAL,
   STORAGE_COLLECTIONS,
   TICK_HZ,
 } from 'irij-shared/constants';
@@ -25,6 +26,7 @@ import { asPlayer, asPlayerState } from 'irij-shared/types';
 
 import mapJson from '../../../client/public/maps/test_50x50.tmj';
 import { log } from '../lib/log.js';
+import { savePlayersState } from './autosave.js';
 import {
   addPresenceToChunk,
   broadcastToChunkArea,
@@ -207,12 +209,20 @@ export function matchJoin(
 export function matchLeave(
   _ctx: nkruntime.Context,
   logger: nkruntime.Logger,
-  _nk: nkruntime.Nakama,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   _tick: number,
   state: WorldMatchState,
   presences: nkruntime.Presence[],
 ): { state: WorldMatchState } {
+  // Final flush before removing presences — persist position + last_logout_at.
+  const leavingUserIds = presences
+    .map((p) => p.userId)
+    .filter((id) => !!state.presencesByUserId[id]);
+  if (leavingUserIds.length > 0) {
+    savePlayersState(nk, logger, state, leavingUserIds, true);
+  }
+
   for (const presence of presences) {
     const userId = presence.userId;
     const ps = state.presencesByUserId[userId];
@@ -279,13 +289,21 @@ export function matchLoop(
 
   advanceMovement(state, dispatcher, tick);
 
+  // Phase 5: periodic autosave every PLAYER_AUTOSAVE_INTERVAL ticks (30 s).
+  if (tick > 0 && tick % PLAYER_AUTOSAVE_INTERVAL === 0) {
+    const userIds = Object.keys(state.presencesByUserId);
+    if (userIds.length > 0) {
+      savePlayersState(nk, logger, state, userIds, false);
+    }
+  }
+
   return { state };
 }
 
 export function matchTerminate(
   _ctx: nkruntime.Context,
   logger: nkruntime.Logger,
-  _nk: nkruntime.Nakama,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   _tick: number,
   state: WorldMatchState,
@@ -293,6 +311,10 @@ export function matchTerminate(
 ): { state: WorldMatchState } {
   const userIds = Object.keys(state.presencesByUserId);
   log(logger, 'info', 'Match terminating', { presenceCount: userIds.length });
+
+  if (userIds.length > 0) {
+    savePlayersState(nk, logger, state, userIds, true);
+  }
 
   for (const userId of userIds) {
     const ps = state.presencesByUserId[userId];
