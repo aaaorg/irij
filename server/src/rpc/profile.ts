@@ -27,6 +27,7 @@ import type {
   EquipmentEntry,
   InventorySlot,
   Player,
+  PlayerState,
   SatchelEntry,
   SkillRow,
 } from 'irij-shared/types';
@@ -49,19 +50,22 @@ export function profileGetSelf(
 
   const objects = nk.storageRead([
     { collection: STORAGE_COLLECTIONS.PLAYER, key: userId, userId },
+    { collection: STORAGE_COLLECTIONS.PLAYER_STATE, key: userId, userId },
     { collection: STORAGE_COLLECTIONS.PLAYER_SKILLS, key: userId, userId },
     { collection: STORAGE_COLLECTIONS.PLAYER_INVENTORY, key: userId, userId },
   ]);
 
   const playerObj = objects.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER);
+  const stateObj = objects.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_STATE);
   const skillsObj = objects.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_SKILLS);
   const invObj = objects.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_INVENTORY);
 
-  if (!playerObj || !skillsObj || !invObj) {
+  if (!playerObj || !stateObj || !skillsObj || !invObj) {
     return JSON.stringify({ exists: false } satisfies GetSelfResponse);
   }
 
   const player = playerObj.value as Player;
+  const playerState = stateObj.value as PlayerState;
   const skillsBlob = skillsObj.value as { atributy: AtributRow[]; skilly: SkillRow[] };
   const invBlob = invObj.value as {
     inventory: InventorySlot[];
@@ -74,6 +78,7 @@ export function profileGetSelf(
   const response: GetSelfResponse = {
     exists: true,
     player,
+    player_state: playerState,
     atributy: skillsBlob.atributy,
     skilly: skillsBlob.skilly,
     inventory: invBlob.inventory,
@@ -121,6 +126,7 @@ export function profileCreateCharacter(
   const now = new Date().toISOString();
 
   const player: Player = {
+    schema_version: 1,
     id: userId,
     username: req.username,
     display_name: req.display_name,
@@ -128,18 +134,21 @@ export function profileCreateCharacter(
     appearance: { ...req.appearance },
     created_at: now,
     last_login_at: now,
-    last_logout_at: now,
     total_xp: 0,
     total_level: ATRIBUT_NAMES.length + SKILL_NAMES.length, // 21 × lvl 1
+    tutorial_completed: false,
+    settings: {},
+  };
+
+  const playerState: PlayerState = {
+    schema_version: 1,
     current_zone_id: DEFAULT_SPAWN_ZONE,
     current_position: { ...DEFAULT_SPAWN_POSITION },
     hp_current: DEFAULT_HP,
-    hp_last_update_at: now,
-    death_debuff_expires_at: null,
+    hp_max: DEFAULT_HP,
     mana_current: DEFAULT_MANA,
-    mana_last_update_at: now,
-    tutorial_completed: false,
-    settings: {},
+    death_debuff_expires_at: null,
+    last_logout_at: now,
   };
 
   const atributy: AtributRow[] = ATRIBUT_NAMES.map((name) => ({ name, xp: 0, level: 1 }));
@@ -174,6 +183,14 @@ export function profileCreateCharacter(
       key: userId,
       userId,
       value: player,
+      permissionRead: PERMISSION_OWNER_READ,
+      permissionWrite: PERMISSION_NO_WRITE,
+    },
+    {
+      collection: STORAGE_COLLECTIONS.PLAYER_STATE,
+      key: userId,
+      userId,
+      value: playerState,
       permissionRead: PERMISSION_OWNER_READ,
       permissionWrite: PERMISSION_NO_WRITE,
     },

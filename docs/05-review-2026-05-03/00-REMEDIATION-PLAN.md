@@ -117,7 +117,7 @@
 
 ## Sekce B — Storage & persistence hardening (před Phase 5)
 
-### B1 — OCC version handling pattern (P0)
+### B1 — OCC version handling pattern (P0) ✅ PR #23
 
 - **Source:** DB Architect, Nakama specialist.
 - **Why:** `nk.storageWrite` podporuje `version` field (CAS). Phase 5 autosave (30 s) souběžně s explicit RPC = lost-update na inventory = duplikace itemů = anti-inflation P0.
@@ -134,7 +134,7 @@
 - **Verify:** unit test s fake storage mockem (Vitest), expect retry na conflict.
 - **Effort:** ~3 h.
 
-### B2 — Split `player_state` z `player` blobu (P1)
+### B2 — Split `player_state` z `player` blobu (P1) ✅ PR #23
 
 - **Source:** DB Architect.
 - **Why:** Hot-path autosave (pozice, HP, current zone) nemá smysl serializovat celý profile blob. Frequent write → contention s méně častými RPC writes.

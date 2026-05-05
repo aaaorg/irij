@@ -92,6 +92,7 @@ export interface PlayerStatusEffect {
 }
 
 export interface Player {
+  schema_version: number;
   id: string;
   username: string;
   display_name: string;
@@ -99,16 +100,21 @@ export interface Player {
   appearance: Appearance;
   created_at: string;
   last_login_at: string;
-  last_logout_at: string;
   total_xp: number;
   total_level: number;
+  tutorial_completed: boolean;
+  settings: Record<string, unknown>;
+}
+
+// Hot-path state split from Player — Phase 5 autosave writes only this blob.
+// Player blob is write-once + explicit RPC only.
+export interface PlayerState {
+  schema_version: number;
   current_zone_id: string;
   current_position: { x: number; y: number };
   hp_current: number;
-  hp_last_update_at: string;
-  death_debuff_expires_at: string | null;
+  hp_max: number;
   mana_current: number;
-  mana_last_update_at: string;
-  tutorial_completed: boolean;
-  settings: Record<string, unknown>;
+  death_debuff_expires_at: string | null;
+  last_logout_at: string;
 }

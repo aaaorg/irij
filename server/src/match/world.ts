@@ -21,7 +21,7 @@ import type {
   WorldSnapshot,
   WorldSnapshotEntity,
 } from 'irij-shared/messages';
-import type { Player } from 'irij-shared/types';
+import type { Player, PlayerState } from 'irij-shared/types';
 
 // Mapa je bundlnutá do server modulu přes esbuild .tmj loader (build.js).
 // Single source of truth — klient i server čtou stejný soubor, žádný drift.
@@ -97,25 +97,26 @@ export function matchJoin(
   for (const presence of presences) {
     const userId = presence.userId;
 
-    // Načti Player blob — postava musí existovat (Phase 2 character creation).
-    // Pokud neexistuje, kickuj — match není místo, kde postavu vytváříme.
     const reads = nk.storageRead([
       { collection: STORAGE_COLLECTIONS.PLAYER, key: userId, userId },
+      { collection: STORAGE_COLLECTIONS.PLAYER_STATE, key: userId, userId },
     ]);
     const playerObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER);
-    if (!playerObj) {
+    const stateObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_STATE);
+    if (!playerObj || !stateObj) {
       logger.warn(
-        `matchJoin: Player blob missing for ${userId} — kicking. Klient by měl projít přes CharacterCreationScene před joinMatch.`,
+        `matchJoin: Player/PlayerState blob missing for ${userId} — kicking. Klient by měl projít přes CharacterCreationScene před joinMatch.`,
       );
       dispatcher.matchKick([presence]);
       continue;
     }
 
     const player = playerObj.value as Player;
-    const position = player.current_position ?? { ...DEFAULT_SPAWN_POSITION };
+    const pState = stateObj.value as PlayerState;
+    const position = pState.current_position ?? { ...DEFAULT_SPAWN_POSITION };
     const displayName = player.display_name ?? userId.slice(0, 8);
-    const hpCurrent = player.hp_current ?? DEFAULT_HP;
-    const hpMax = DEFAULT_HP; // TODO Phase 8: derive from vitality level
+    const hpCurrent = pState.hp_current ?? DEFAULT_HP;
+    const hpMax = pState.hp_max ?? DEFAULT_HP;
     const lastChunk = chunkKeyOf(position);
 
     const ps: PlayerPresenceState = {

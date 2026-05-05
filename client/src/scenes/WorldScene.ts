@@ -433,7 +433,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private spawnPlayer(profile: PlayerProfile): void {
-    const { x, y } = profile.player.current_position;
+    const { x, y } = profile.player_state.current_position;
     const center = this.tileCenterPx({ x, y });
     // Phaser ISOMETRIC tilemap renderuje tile (x,y) tak, že bounding box top-left
     // je na worldToScreen(x,y). Diamond center = +TW/2 vodorovně, +TH/2 svisle.
@@ -447,7 +447,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private buildHud(profile: PlayerProfile): void {
-    const { display_name, current_zone_id, current_position } = profile.player;
+    const { display_name } = profile.player;
+    const { current_zone_id, current_position } = profile.player_state;
     this.add
       .text(
         12,
