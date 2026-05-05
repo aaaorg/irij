@@ -87,7 +87,7 @@ export function handleAttackRequest(
   }
 
   const dist = chebyshevDistance(ps.position, mob.position);
-  if (dist > MELEE_RANGE_TILES) {
+  if (dist === 0 || dist > MELEE_RANGE_TILES) {
     log(logger, 'debug', 'attack rejected: out of range', {
       userId: userId.slice(0, 8),
       dist,
@@ -138,7 +138,7 @@ function resolvePlayerAttacks(
     }
 
     const dist = chebyshevDistance(ps.position, mob.position);
-    if (dist > MELEE_RANGE_TILES) {
+    if (dist === 0 || dist > MELEE_RANGE_TILES) {
       state.combatEngagements = { ...state.combatEngagements, [userId]: null };
       continue;
     }
@@ -208,7 +208,7 @@ function resolveMobAttacks(
     if (!def) continue;
 
     const dist = chebyshevDistance(mob.position, target.position);
-    if (dist > def.stats.range_tiles) continue;
+    if (dist === 0 || dist > def.stats.range_tiles) continue;
 
     const baseDamage = randomInt(def.stats.damage_min, def.stats.damage_max);
     const hitRoll = randomInt(0, 99);

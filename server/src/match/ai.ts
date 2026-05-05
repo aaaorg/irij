@@ -189,7 +189,7 @@ function tickChase(
   const range = def?.stats.range_tiles ?? 1;
   const distToTarget = chebyshevDistance(mob.position, target.position);
 
-  if (distToTarget <= range) {
+  if (distToTarget >= 1 && distToTarget <= range) {
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: { ...mob, aiState: 'attack' as const, path: [] },
@@ -197,7 +197,16 @@ function tickChase(
     return;
   }
 
-  if (mob.path.length > 0) return;
+  // Re-path if: no path, OR target moved far from end of current path
+  let needRepath = mob.path.length === 0;
+  if (!needRepath && mob.path.length > 0) {
+    const pathEnd = mob.path[mob.path.length - 1];
+    if (pathEnd) {
+      const endToTarget = chebyshevDistance(pathEnd, target.position);
+      if (endToTarget > 3) needRepath = true;
+    }
+  }
+  if (!needRepath) return;
 
   const chaseTarget = findAdjacentToTarget(state, mob.position, target.position) ?? target.position;
   const path = findPath(state.walkable, mob.position, chaseTarget, { maxPathLength: 16 });
@@ -242,7 +251,7 @@ function tickAttack(
   const range = def?.stats.range_tiles ?? 1;
   const dist = chebyshevDistance(mob.position, target.position);
 
-  if (dist > range) {
+  if (dist === 0 || dist > range) {
     state.mobInstances = {
       ...state.mobInstances,
       [mob.instanceId]: { ...mob, aiState: 'chase' as const },

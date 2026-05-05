@@ -191,6 +191,17 @@ export class WorldScene extends Phaser.Scene {
 
   private handleWorldSnapshot(snapshot: WorldSnapshot): void {
     if (!snapshot || !Array.isArray(snapshot.entities)) return;
+
+    // Clean up stale remote players before processing snapshot (prevents duplicate sprites
+    // when Playwright smoke test or rapid reconnect produces overlapping sessions)
+    for (const [id, sprite] of this.otherPlayers) {
+      this.entityMoveStates.delete(id);
+      this.removeHpBar(id);
+      this.entityTilePositions.delete(id);
+      sprite.destroy();
+    }
+    this.otherPlayers.clear();
+
     for (const entity of snapshot.entities) {
       if (entity.type === 'player') {
         this.spawnRemotePlayerIfNeeded(entity);
@@ -458,6 +469,12 @@ export class WorldScene extends Phaser.Scene {
     if (!this.pendingAttackTarget || !this.connRef || !this.matchId) return;
 
     const targetId = this.pendingAttackTarget;
+    const mobSprite = this.mobSprites.get(targetId);
+    if (!mobSprite || !mobSprite.active || mobSprite.alpha <= 0) {
+      this.pendingAttackTarget = null;
+      return;
+    }
+
     const mobPos = this.entityTilePositions.get(targetId);
     if (!mobPos) {
       this.pendingAttackTarget = null;
@@ -469,7 +486,8 @@ export class WorldScene extends Phaser.Scene {
       Math.abs(this.selfTilePosition.y - mobPos.y),
     );
 
-    if (dist <= 1) {
+    if (dist === 1) {
+      // In range — attack
       this.pendingAttackTarget = null;
       this.clientSeq += 1;
       const payload = JSON.stringify({
@@ -480,6 +498,19 @@ export class WorldScene extends Phaser.Scene {
         .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
         .catch((err) => {
           console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
+        });
+    } else if (!this.selfUserId || !this.entityMoveStates.has(this.selfUserId)) {
+      // Not moving and not in range — re-approach
+      const approachTile = this.findBestAdjacentTile(mobPos);
+      this.clientSeq += 1;
+      const payload = JSON.stringify({
+        target: approachTile,
+        client_seq: this.clientSeq,
+      });
+      this.connRef.socket
+        .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+        .catch((err) => {
+          console.warn(`sendMatchState MOVE_REQUEST (re-approach) failed`, err);
         });
     }
   }
@@ -695,8 +726,8 @@ export class WorldScene extends Phaser.Scene {
           )
         : Infinity;
 
-      if (dist <= 1) {
-        // In range — attack immediately
+      if (dist === 1) {
+        // In range (adjacent) — attack immediately
         this.pendingAttackTarget = null;
         this.clientSeq += 1;
         const payload = JSON.stringify({
