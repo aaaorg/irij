@@ -1,15 +1,9 @@
-// World match handler — viz docs/04-tech-adr.md ADR-005, ADR-007.
-// Single match for MVP, chunk-cluster ready (kód strukturován per chunk).
-//
-// Handlery jsou top-level pojmenované funkce. Nakama Goja runtime extrahuje match
-// handler identifikátory přes shorthand property references (`{ matchInit }`)
-// v `initializer.registerMatch(...)` druhém argumentu — function literals
-// (method shorthand v object literal) Nakama odmítne s "function literal found:
-// javascript functions cannot be inlined".
-
 import {
+  AI_TICK_INTERVAL,
+  COMBAT_TICK_INTERVAL,
   DEFAULT_HP,
   DEFAULT_SPAWN_POSITION,
+  MOB_RESPAWN_CHECK_INTERVAL,
   MOVEMENT_SPEED_TPS_BASE,
   PLAYER_AUTOSAVE_INTERVAL,
   STORAGE_COLLECTIONS,
@@ -23,16 +17,25 @@ import type {
   WorldSnapshotEntity,
 } from 'irij-shared/messages';
 import { asPlayer, asPlayerState } from 'irij-shared/types';
+import type { MobDefinition, LootTable, MobSpawnPoint } from 'irij-shared/types';
 
 import mapJson from '../../../client/public/maps/test_50x50.tmj';
+import mobsData from '../../data/mobs.json';
+import lootTablesData from '../../data/loot_tables.json';
+import mobSpawnsData from '../../data/mob_spawns.json';
+
 import { log } from '../lib/log.js';
 import { savePlayersState } from './autosave.js';
+import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
+import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
 import {
+  addMobToChunk,
   addPresenceToChunk,
   broadcastToChunkArea,
   chunkKeyOf,
   recipientsInRangeOfChunk,
   removePresenceFromChunk,
+  type MobInstanceState,
   type PlayerPresenceState,
   type WorldMatchState,
 } from './state.js';
@@ -53,18 +56,74 @@ export function matchInit(
   const walkable = maskFromTiledMap(mapJson);
   const total = walkable.width * walkable.height;
   const w = countWalkable(walkable);
+
+  const mobDefinitions: { [id: string]: MobDefinition } = {};
+  for (const m of mobsData as MobDefinition[]) {
+    mobDefinitions[m.id] = m;
+  }
+
+  const lootTables: { [id: string]: LootTable } = {};
+  for (const lt of lootTablesData as LootTable[]) {
+    lootTables[lt.id] = lt;
+  }
+
+  const mobInstances: { [id: string]: MobInstanceState } = {};
+  const mobsByChunk: { [ck: string]: { [id: string]: true } } = {};
+
+  for (const spawn of mobSpawnsData as MobSpawnPoint[]) {
+    const def = mobDefinitions[spawn.mob_id];
+    if (!def) {
+      log(logger, 'warn', 'Unknown mob_id in spawn', { spawnId: spawn.id, mobId: spawn.mob_id });
+      continue;
+    }
+    const pos = spawn.spawn_position;
+    const ck = chunkKeyOf(pos);
+    const instance: MobInstanceState = {
+      instanceId: spawn.id,
+      mobId: spawn.mob_id,
+      position: { ...pos },
+      spawnPosition: { ...pos },
+      hpCurrent: def.stats.hp_max,
+      hpMax: def.stats.hp_max,
+      aiState: 'idle',
+      targetUserId: null,
+      lastAttackTick: 0,
+      lastChunk: ck,
+      path: [],
+      pathStartedAt: 0,
+      pathConsumed: 0,
+      deathTick: null,
+      respawnAtTick: null,
+      leashRadiusTiles: def.leash_radius_tiles,
+      speedTps: def.stats.movement_speed_tps,
+    };
+    mobInstances[spawn.id] = instance;
+    if (!mobsByChunk[ck]) mobsByChunk[ck] = {};
+    mobsByChunk[ck] = { ...mobsByChunk[ck], [spawn.id]: true };
+  }
+
   log(logger, 'info', 'World match init', {
     width: walkable.width,
     height: walkable.height,
     walkable: w,
     total,
+    mobs: Object.keys(mobInstances).length,
   });
+
   const state: WorldMatchState = {
     tick: 0,
     walkable,
     presencesByUserId: {},
     presencesByChunk: {},
     moveRequestLog: {},
+    attackRequestLog: {},
+    mobDefinitions,
+    lootTables,
+    mobInstances,
+    mobsByChunk,
+    dropInstances: {},
+    dropsByChunk: {},
+    combatEngagements: {},
   };
   return {
     state,
@@ -179,6 +238,49 @@ export function matchJoin(
       }
       visibleEntities.push(entry);
     }
+
+    // Include alive mobs in snapshot
+    for (const instanceId of Object.keys(state.mobInstances)) {
+      const mob = state.mobInstances[instanceId];
+      if (!mob || mob.aiState === 'dead') continue;
+      const mobChunk = mob.lastChunk;
+      const chunkDist = chunkDistFromKeys(lastChunk, mobChunk);
+      if (chunkDist > 1) continue;
+
+      const def = state.mobDefinitions[mob.mobId];
+      const mobEntry: WorldSnapshotEntity = {
+        id: mob.instanceId,
+        type: 'mob',
+        position: mob.position,
+        hp_pct: mob.hpMax > 0 ? mob.hpCurrent / mob.hpMax : 1,
+        mob_id: mob.mobId,
+        display_name_cs: def?.name_cs,
+        level: def?.level,
+      };
+      if (mob.path.length > 0) {
+        mobEntry.path = mob.path;
+        mobEntry.speed_tps = mob.speedTps;
+        mobEntry.started_at_tick = mob.pathStartedAt;
+      }
+      visibleEntities.push(mobEntry);
+    }
+
+    // Include ground drops in snapshot
+    for (const dropId of Object.keys(state.dropInstances)) {
+      const drop = state.dropInstances[dropId];
+      if (!drop) continue;
+      const dropChunk = drop.lastChunk;
+      const chunkDist = chunkDistFromKeys(lastChunk, dropChunk);
+      if (chunkDist > 1) continue;
+
+      visibleEntities.push({
+        id: drop.dropId,
+        type: 'drop',
+        position: drop.position,
+        items: drop.items,
+      });
+    }
+
     const snapshot: WorldSnapshot = {
       tick: state.tick,
       entities: visibleEntities,
@@ -215,7 +317,6 @@ export function matchLeave(
   state: WorldMatchState,
   presences: nkruntime.Presence[],
 ): { state: WorldMatchState } {
-  // Final flush before removing presences — persist position + last_logout_at.
   const leavingUserIds = presences
     .map((p) => p.userId)
     .filter((id) => !!state.presencesByUserId[id]);
@@ -248,6 +349,27 @@ export function matchLeave(
       delete nextLog[userId];
       state.moveRequestLog = nextLog;
     }
+    if (state.attackRequestLog[userId]) {
+      const nextLog = { ...state.attackRequestLog };
+      delete nextLog[userId];
+      state.attackRequestLog = nextLog;
+    }
+    if (state.combatEngagements[userId] !== undefined) {
+      const next = { ...state.combatEngagements };
+      delete next[userId];
+      state.combatEngagements = next;
+    }
+
+    // Release mob targeting this player
+    for (const instanceId of Object.keys(state.mobInstances)) {
+      const mob = state.mobInstances[instanceId];
+      if (mob && mob.targetUserId === userId) {
+        state.mobInstances = {
+          ...state.mobInstances,
+          [instanceId]: { ...mob, aiState: 'idle' as const, targetUserId: null },
+        };
+      }
+    }
 
     log(logger, 'info', 'matchLeave', {
       displayName: ps.displayName,
@@ -269,32 +391,51 @@ export function matchLoop(
   state.tick = tick;
 
   for (const msg of messages) {
+    const raw = msg.data as unknown;
+    let text: string;
+    if (typeof raw === 'string') {
+      text = raw;
+    } else {
+      const bytes = new Uint8Array(raw as ArrayBuffer);
+      let s = '';
+      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
+      text = s;
+    }
+
     if (msg.opCode === Op.MOVE_REQUEST) {
-      const raw = msg.data as unknown;
-      let text: string;
-      if (typeof raw === 'string') {
-        text = raw;
-      } else {
-        const bytes = new Uint8Array(raw as ArrayBuffer);
-        let s = '';
-        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i] ?? 0);
-        text = s;
-      }
       const result = handleMoveRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
       if (!result.ok && result.reason) {
         broadcastMoveRejected(dispatcher, msg.sender, result.reason, result.clientSeq);
       }
+    } else if (msg.opCode === Op.ATTACK_REQUEST) {
+      handleAttackRequest(state, logger, dispatcher, msg.sender, text, tick);
     }
   }
 
   advanceMovement(state, dispatcher, tick);
+  advanceMobMovement(state, dispatcher, tick);
 
-  // Phase 5: periodic autosave every PLAYER_AUTOSAVE_INTERVAL ticks (30 s).
+  if (tick > 0 && tick % AI_TICK_INTERVAL === 0) {
+    runAiTick(state, logger, dispatcher, tick);
+  }
+
+  if (tick > 0 && tick % COMBAT_TICK_INTERVAL === 0) {
+    runCombatTick(state, logger, dispatcher, tick);
+  }
+
+  if (tick > 0 && tick % MOB_RESPAWN_CHECK_INTERVAL === 0) {
+    checkMobRespawns(state, dispatcher, tick);
+  }
+
   if (tick > 0 && tick % PLAYER_AUTOSAVE_INTERVAL === 0) {
     const userIds = Object.keys(state.presencesByUserId);
     if (userIds.length > 0) {
       savePlayersState(nk, logger, state, userIds, false);
     }
+  }
+
+  if (tick > 0 && tick % (PLAYER_AUTOSAVE_INTERVAL * 2) === 0) {
+    cleanupExpiredDrops(state, dispatcher, tick);
   }
 
   return { state };
@@ -343,4 +484,10 @@ export function matchSignal(
   _data: string,
 ): { state: WorldMatchState; data?: string } {
   return { state };
+}
+
+function chunkDistFromKeys(a: string, b: string): number {
+  const [ax, ay] = a.split(',').map(Number) as [number, number];
+  const [bx, by] = b.split(',').map(Number) as [number, number];
+  return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 }

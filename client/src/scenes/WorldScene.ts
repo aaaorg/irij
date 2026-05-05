@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import type {
+  CombatResolved,
   EntityDespawned,
+  EntityDied,
   EntityMoved,
   EntitySpawned,
   FindOrCreateMatchResponse,
@@ -10,6 +12,7 @@ import type {
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
 import type { Position } from 'irij-shared/types';
+import { DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, screenToTile, worldToScreen } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -18,32 +21,35 @@ import { REGISTRY_KEY_CONNECTION, REGISTRY_KEY_PLAYER, type PlayerProfile } from
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
-const TILESET_NAME = 'placeholder'; // musí matchnout `name` v test_50x50.tmj
+const TILESET_NAME = 'placeholder';
 const TERRAIN_LAYER_NAME = 'terrain';
 const CHARACTER_KEY = 'characterPlaceholder';
+const WOLF_KEY = 'mobWolf';
+const RAT_KEY = 'mobRat';
+const DROP_KEY = 'dropPlaceholder';
 
-// Sprite-sheet frame index pro 4 iso směry (asset gen pořadí: SE, SW, NW, NE).
-// Phase 3 statická postava → fix na SE (default facing pro 2:1 iso kompas).
-// Phase 4c stále nemění frame podle směru pohybu — animace pohybu (frame
-// switching podle azimutu) přijde v Phase 6+ s polish sprite anims.
 const FRAME_FACING_SE = 0;
 
-// Hrubý HUD click-shield: HUD label je v levém horním rohu (12, 12) s padding,
-// celkově nepřesáhne ~30 px výšky a ~200 px šířky pro rozumný display_name.
-// Pro Phase 4c stačí; Phase 17 polish bude mít proper hit-region/depth picking.
 const HUD_GUARD_W = 200;
 const HUD_GUARD_H = 30;
 
-// Deterministic interpolation state per entity (per ADR-019). Klient drží
-// path baseline ze serveru a každý frame v `update()` přepočítá sprite pozici
-// z `Date.now() - startedAtMs`. Self-correcting: tab v pozadí zastaví Phaser
-// scene, ale `Date.now()` běží dál — po tab return update() recomputuje pozici
-// z wall-clock baseline a sprite plynule (nebo skokem) chytí server-current.
+const MOB_TEXTURE_MAP: Record<string, string> = {
+  'mob.wolf': WOLF_KEY,
+  'mob.giant_rat': RAT_KEY,
+};
+
 interface EntityMovementState {
   from: Position;
   path: Position[];
   speedTps: number;
   startedAtMs: number;
+  lastTileIdx: number;
+}
+
+interface HpBarState {
+  bg: Phaser.GameObjects.Rectangle;
+  fg: Phaser.GameObjects.Rectangle;
+  hpPct: number;
 }
 
 export class WorldScene extends Phaser.Scene {
@@ -52,9 +58,17 @@ export class WorldScene extends Phaser.Scene {
   private connRef?: NakamaConnection;
   private selfUserId?: string;
   private otherPlayers: Map<string, Phaser.GameObjects.Sprite> = new Map();
+  private mobSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
+  private dropSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
   private entityMoveStates: Map<string, EntityMovementState> = new Map();
+  private hpBars: Map<string, HpBarState> = new Map();
+  private entityTilePositions: Map<string, Position> = new Map();
   private clientSeq = 0;
   private rejectToast?: Phaser.GameObjects.Text;
+  private pendingAttackTarget: string | null = null;
+  private lastAttackRequestSentAt = 0;
+  private lastApproachSentAt = 0;
+  private selfTilePosition: Position = { x: 25, y: 25 };
 
   constructor() {
     super('WorldScene');
@@ -67,6 +81,15 @@ export class WorldScene extends Phaser.Scene {
       frameWidth: 32,
       frameHeight: 48,
     });
+    this.load.spritesheet(WOLF_KEY, 'sprites/placeholder_wolf.png', {
+      frameWidth: 32,
+      frameHeight: 48,
+    });
+    this.load.spritesheet(RAT_KEY, 'sprites/placeholder_rat.png', {
+      frameWidth: 32,
+      frameHeight: 48,
+    });
+    this.load.image(DROP_KEY, 'sprites/placeholder_drop.png');
   }
 
   create(): void {
@@ -74,8 +97,6 @@ export class WorldScene extends Phaser.Scene {
     const profile = this.registry.get(REGISTRY_KEY_PLAYER) as PlayerProfile | undefined;
 
     if (!conn || !profile) {
-      // Defenzivní fallback — WorldScene by neměla být spuštěna bez connection a profilu,
-      // ale kdyby přes deeplink / restart, vrať se na login.
       console.warn('WorldScene started without connection/profile — returning to LoginScene');
       this.scene.start('LoginScene');
       return;
@@ -97,12 +118,6 @@ export class WorldScene extends Phaser.Scene {
     this.input.on('pointerdown', this.handlePointerDown, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.onShutdown, this);
 
-    // Phase 4c: click-to-move + dispatch table na onmatchdata. Server-authoritative
-    // movement; klient nepredikuje, jen posílá MOVE_REQUEST a deterministic-ky
-    // lerpuje per ADR-019. Server posílá ENTITY_MOVED 1× s celou path, klient
-    // udržuje wall-clock baseline a v update() recomputuje sprite pozici every frame.
-    // TODO post-MVP: client-side prediction + reconciliation pro skrytí ~50 ms latence.
-    // TODO post-MVP: 1 Hz WORLD_SNAPSHOT keepalive proti server clock drift.
     this.joinWorldMatch(conn).catch((err) => {
       console.error('joinWorldMatch failed', err);
     });
@@ -122,9 +137,6 @@ export class WorldScene extends Phaser.Scene {
     const { match_id } = response;
     console.log(`Joining world match ${match_id}`);
 
-    // Subscribe BEFORE joinMatch — Nakama může poslat WORLD_SNAPSHOT během
-    // matchJoin handleru, takže handler musí být registrovaný předtím, než
-    // server potvrdí join.
     conn.socket.onmatchdata = (md) => {
       let payload: unknown;
       try {
@@ -154,6 +166,12 @@ export class WorldScene extends Phaser.Scene {
         case Op.MOVE_REJECTED:
           this.handleMoveRejected(payload as MoveRejected);
           break;
+        case Op.COMBAT_RESOLVED:
+          this.handleCombatResolved(payload as CombatResolved);
+          break;
+        case Op.ENTITY_DIED:
+          this.handleEntityDied(payload as EntityDied);
+          break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
       }
@@ -177,58 +195,121 @@ export class WorldScene extends Phaser.Scene {
 
   private handleWorldSnapshot(snapshot: WorldSnapshot): void {
     if (!snapshot || !Array.isArray(snapshot.entities)) return;
+
+    // Clean up stale remote players before processing snapshot (prevents duplicate sprites
+    // when Playwright smoke test or rapid reconnect produces overlapping sessions)
+    for (const [id, sprite] of this.otherPlayers) {
+      this.entityMoveStates.delete(id);
+      this.removeHpBar(id);
+      this.entityTilePositions.delete(id);
+      sprite.destroy();
+    }
+    this.otherPlayers.clear();
+
     for (const entity of snapshot.entities) {
-      this.spawnRemotePlayerIfNeeded(entity);
-      // Per ADR-019: pokud entity je uprostřed pohybu, server pošle path
-      // suffix v snapshotu. Po spawnu sprite hned spustíme TweenChain, takže
-      // joiner vidí ostatní v plynulém pohybu.
-      if (
-        entity.id !== this.selfUserId &&
-        entity.path &&
-        entity.path.length > 0 &&
-        entity.speed_tps !== undefined
-      ) {
-        this.startEntityMovement(entity.id, entity.position, entity.path, entity.speed_tps);
+      if (entity.type === 'player') {
+        this.spawnRemotePlayerIfNeeded(entity);
+        if (
+          entity.id !== this.selfUserId &&
+          entity.path &&
+          entity.path.length > 0 &&
+          entity.speed_tps !== undefined
+        ) {
+          this.startEntityMovement(entity.id, entity.position, entity.path, entity.speed_tps);
+        }
+      } else if (entity.type === 'mob') {
+        this.spawnMobIfNeeded(entity);
+        if (entity.path && entity.path.length > 0 && entity.speed_tps !== undefined) {
+          this.startEntityMovement(entity.id, entity.position, entity.path, entity.speed_tps);
+        }
+      } else if (entity.type === 'drop') {
+        this.spawnDropIfNeeded(entity);
       }
     }
   }
 
   private handleEntitySpawned(payload: EntitySpawned): void {
     if (!payload?.entity_id) return;
-    if (payload.type !== 'player') return; // mobi/drops/npc Phase 6+
-    if (payload.entity_id === this.selfUserId) return; // self → vlastní spawnPlayer
-    this.spawnRemotePlayerIfNeeded({
-      id: payload.entity_id,
-      type: 'player',
-      position: payload.position,
-      display_name: payload.display_name,
-      hp_pct: payload.hp_pct,
-    });
+    if (payload.type === 'player') {
+      if (payload.entity_id === this.selfUserId) return;
+      this.spawnRemotePlayerIfNeeded({
+        id: payload.entity_id,
+        type: 'player',
+        position: payload.position,
+        display_name: payload.display_name,
+        hp_pct: payload.hp_pct,
+      });
+    } else if (payload.type === 'mob') {
+      this.spawnMobIfNeeded({
+        id: payload.entity_id,
+        type: 'mob',
+        position: payload.position,
+        mob_id: payload.mob_id,
+        display_name_cs: payload.display_name_cs,
+        level: payload.level,
+        hp_pct: payload.hp_pct,
+      });
+    } else if (payload.type === 'drop') {
+      this.spawnDropIfNeeded({
+        id: payload.entity_id,
+        type: 'drop',
+        position: payload.position,
+        items: payload.items,
+      });
+    }
   }
 
   private handleEntityDespawned(payload: EntityDespawned): void {
     if (!payload?.entity_id) return;
-    const sprite = this.otherPlayers.get(payload.entity_id);
-    if (!sprite) return;
-    this.entityMoveStates.delete(payload.entity_id);
-    this.tweens.killTweensOf(sprite);
-    sprite.destroy();
-    this.otherPlayers.delete(payload.entity_id);
+    const entityId = payload.entity_id;
+
+    // Player
+    const playerSprite = this.otherPlayers.get(entityId);
+    if (playerSprite) {
+      this.entityMoveStates.delete(entityId);
+      this.tweens.killTweensOf(playerSprite);
+      playerSprite.destroy();
+      this.otherPlayers.delete(entityId);
+      this.removeHpBar(entityId);
+      this.entityTilePositions.delete(entityId);
+      return;
+    }
+
+    // Mob
+    const mobSprite = this.mobSprites.get(entityId);
+    if (mobSprite) {
+      this.entityMoveStates.delete(entityId);
+      this.tweens.killTweensOf(mobSprite);
+      mobSprite.destroy();
+      this.mobSprites.delete(entityId);
+      this.removeHpBar(entityId);
+      this.entityTilePositions.delete(entityId);
+      return;
+    }
+
+    // Drop
+    const dropSprite = this.dropSprites.get(entityId);
+    if (dropSprite) {
+      dropSprite.destroy();
+      this.dropSprites.delete(entityId);
+    }
   }
 
   private handleEntityMoved(payload: EntityMoved): void {
-    if (!payload?.entity_id || !payload.from || !Array.isArray(payload.path)) return;
-    if (payload.path.length === 0) return;
+    if (!payload?.entity_id || !payload.from) return;
+
+    // Position correction / stop (empty path) — snap entity to server position
+    if (!Array.isArray(payload.path) || payload.path.length === 0) {
+      this.snapEntityToServerPosition(payload.entity_id, payload.from);
+      return;
+    }
+
     if (typeof payload.speed_tps !== 'number' || payload.speed_tps <= 0) return;
 
-    // Sprite check je defensive — pokud chybí (race s ENTITY_SPAWNED), uložíme
-    // state stejně, update() ho ignoruje a smaže až přijde ENTITY_SPAWNED. Tj.
-    // pre-spawn ENTITY_MOVED se ztratí, ale to je akceptovatelné — server posílá
-    // ENTITY_SPAWNED s aktuální pozicí.
     const hasSprite =
       payload.entity_id === this.selfUserId
         ? !!this.player
-        : this.otherPlayers.has(payload.entity_id);
+        : this.otherPlayers.has(payload.entity_id) || this.mobSprites.has(payload.entity_id);
     if (!hasSprite) {
       console.warn(`[match ENTITY_MOVED] sprite not found for ${payload.entity_id.slice(0, 8)}`);
       return;
@@ -237,11 +318,128 @@ export class WorldScene extends Phaser.Scene {
     this.startEntityMovement(payload.entity_id, payload.from, payload.path, payload.speed_tps);
   }
 
-  // Sdílený pipeline pro WORLD_SNAPSHOT in-flight entries i ENTITY_MOVED:
-  // ulož deterministic baseline state (path + startedAtMs); update() loop
-  // přepočítá sprite pozici every frame z `Date.now() - startedAtMs`. Žádný
-  // Phaser tween — rAF v hidden tabu pause-uje a způsobil by drift od serveru.
-  // Per ADR-019.
+  private snapEntityToServerPosition(entityId: string, pos: Position): void {
+    this.entityMoveStates.delete(entityId);
+    this.entityTilePositions.set(entityId, { x: pos.x, y: pos.y });
+    if (entityId === this.selfUserId) {
+      this.selfTilePosition = { x: pos.x, y: pos.y };
+    }
+    const sprite = this.getSpriteForEntity(entityId);
+    if (sprite) {
+      const px = this.tileCenterPx(pos);
+      sprite.setPosition(px.x, px.y);
+      sprite.setDepth(depthForDynamic(pos.y));
+    }
+  }
+
+  private handleCombatResolved(payload: CombatResolved): void {
+    if (!payload) return;
+
+    const targetSprite =
+      this.mobSprites.get(payload.target_id) ??
+      this.otherPlayers.get(payload.target_id) ??
+      (payload.target_id === this.selfUserId ? this.player : undefined);
+
+    if (targetSprite) {
+      const isSelfTarget = payload.target_id === this.selfUserId;
+      let color = '#ffffff';
+      if (isSelfTarget) color = '#ff4444';
+      if (payload.hit_type === 'critical') color = '#ffff00';
+      if (payload.hit_type === 'miss') color = '#888888';
+
+      const text = payload.hit_type === 'miss' ? 'Miss' : String(payload.damage);
+      this.showFloatingText(targetSprite.x, targetSprite.y - 20, text, color);
+    }
+
+    // Update HP bar
+    const mob = this.mobSprites.get(payload.target_id);
+    if (mob) {
+      const def = mob.getData('hpMax') as number | undefined;
+      if (def && def > 0) {
+        this.updateHpBar(payload.target_id, payload.remaining_hp / def);
+      }
+    }
+
+    // Self HP update
+    if (payload.target_id === this.selfUserId && this.player) {
+      const hpMax = this.player.getData('hpMax') as number ?? 10;
+      if (hpMax > 0) {
+        this.updateHpBar('self', payload.remaining_hp / hpMax);
+      }
+    }
+  }
+
+  private handleEntityDied(payload: EntityDied): void {
+    if (!payload?.entity_id) return;
+
+    if (payload.entity_id === this.selfUserId) {
+      this.handleSelfDeath();
+      return;
+    }
+
+    const mobSprite = this.mobSprites.get(payload.entity_id);
+    if (mobSprite) {
+      this.entityMoveStates.delete(payload.entity_id);
+      this.removeHpBar(payload.entity_id);
+      this.entityTilePositions.delete(payload.entity_id);
+      this.tweens.add({
+        targets: mobSprite,
+        alpha: 0,
+        duration: 500,
+        ease: 'Linear',
+        onComplete: () => {
+          mobSprite.destroy();
+          this.mobSprites.delete(payload.entity_id);
+        },
+      });
+    }
+
+    const playerSprite = this.otherPlayers.get(payload.entity_id);
+    if (playerSprite) {
+      this.entityMoveStates.delete(payload.entity_id);
+      this.removeHpBar(payload.entity_id);
+      this.entityTilePositions.delete(payload.entity_id);
+      this.tweens.killTweensOf(playerSprite);
+      playerSprite.destroy();
+      this.otherPlayers.delete(payload.entity_id);
+    }
+
+    if (payload.killer_id === this.selfUserId && payload.xp_awarded.length > 0) {
+      const xpText = payload.xp_awarded
+        .map((a) => `+${a.amount} ${a.skill}`)
+        .join(', ');
+      this.showToast(`XP: ${xpText}`, '#44ff44');
+    }
+  }
+
+  private handleSelfDeath(): void {
+    this.entityMoveStates.delete(this.selfUserId!);
+    this.pendingAttackTarget = null;
+    this.removeHpBar('self');
+
+    const spawnPos = DEFAULT_SPAWN_POSITION;
+    this.selfTilePosition = { x: spawnPos.x, y: spawnPos.y };
+    this.entityTilePositions.set(this.selfUserId!, { x: spawnPos.x, y: spawnPos.y });
+
+    if (this.player) {
+      const px = this.tileCenterPx(spawnPos);
+      this.player.setPosition(px.x, px.y);
+      this.player.setDepth(depthForDynamic(spawnPos.y));
+      this.player.setData('hpCurrent', this.player.getData('hpMax') as number ?? 10);
+    }
+
+    this.showToast('Zemřel jsi!', '#ff4444');
+  }
+
+  private handleMoveRejected(payload: MoveRejected): void {
+    if (!payload) return;
+    console.warn(`[match MOVE_REJECTED] reason=${payload.reason} client_seq=${payload.client_seq}`);
+    if (payload.reason === 'rate_limited') return;
+    this.showMoveRejectedToast(payload.reason);
+  }
+
+  // === Movement ======================================================
+
   private startEntityMovement(
     entityId: string,
     from: Position,
@@ -249,54 +447,83 @@ export class WorldScene extends Phaser.Scene {
     speedTps: number,
   ): void {
     if (path.length === 0) return;
+
+    // Always apply immediately — snap to server-authoritative position.
+    // Previous "pending queue" approach caused visual desync because the
+    // client kept animating stale paths while server positions diverged.
+    this.entityMoveStates.delete(entityId);
+    const sprite = this.getSpriteForEntity(entityId);
+    if (sprite) {
+      const px = this.tileCenterPx(from);
+      sprite.setPosition(px.x, px.y);
+      sprite.setDepth(depthForDynamic(from.y));
+    }
+    this.applyMovement(entityId, from, path, speedTps);
+  }
+
+  private applyMovement(
+    entityId: string,
+    from: Position,
+    path: Position[],
+    speedTps: number,
+  ): void {
     this.entityMoveStates.set(entityId, {
       from: { x: from.x, y: from.y },
       path: path.map((p) => ({ x: p.x, y: p.y })),
       speedTps,
       startedAtMs: Date.now(),
+      lastTileIdx: 0,
     });
+    this.entityTilePositions.set(entityId, { x: from.x, y: from.y });
+    if (entityId === this.selfUserId) {
+      this.selfTilePosition = { x: from.x, y: from.y };
+    }
   }
 
-  // Phaser scene update — zavolán každý frame. Itereuje aktivní movement states
-  // a deterministic-ky vypočítá sprite pozici z wall-clock elapsed. Self-correcting:
-  // - Hidden tab → Phaser pause → update neběží → sprite stojí. Date.now() přitom
-  //   roste, takže po tab return první update spočítá `tilesElapsed` z plného
-  //   uplynulého času a sprite chytí current correct pozici (snap nebo path-end).
-  // - Drift od serveru se korriguje při každém ENTITY_MOVED — server pošle nový
-  //   `from` (= current server position), klient přepíše state, sprite od příští
-  //   frame jede z nové baseline.
   override update(_time: number, _delta: number): void {
-    if (this.entityMoveStates.size === 0) return;
+    if (this.entityMoveStates.size === 0 && this.hpBars.size === 0) return;
     const now = Date.now();
     const completed: string[] = [];
 
-    for (const [entityId, state] of this.entityMoveStates) {
-      const sprite =
-        entityId === this.selfUserId ? this.player : this.otherPlayers.get(entityId);
+    for (const [entityId, mstate] of this.entityMoveStates) {
+      const sprite = this.getSpriteForEntity(entityId);
       if (!sprite) {
         completed.push(entityId);
         continue;
       }
 
-      const elapsedMs = now - state.startedAtMs;
-      const tilesElapsed = (elapsedMs * state.speedTps) / 1000;
+      const elapsedMs = now - mstate.startedAtMs;
+      const tilesElapsed = (elapsedMs * mstate.speedTps) / 1000;
+      const idx = Math.floor(Math.max(0, tilesElapsed));
 
-      if (tilesElapsed >= state.path.length) {
-        // Path doběhl — snap na poslední tile, vyčisti state.
-        const last = state.path[state.path.length - 1];
+      // Tile boundary crossed — update tracked tile position
+      if (idx > mstate.lastTileIdx) {
+        const arrivedTile = mstate.path[idx - 1] ?? mstate.from;
+        this.entityTilePositions.set(entityId, { x: arrivedTile.x, y: arrivedTile.y });
+        if (entityId === this.selfUserId) {
+          this.selfTilePosition = { x: arrivedTile.x, y: arrivedTile.y };
+        }
+        mstate.lastTileIdx = idx;
+      }
+
+      if (tilesElapsed >= mstate.path.length) {
+        const last = mstate.path[mstate.path.length - 1];
         if (last) {
           const px = this.tileCenterPx(last);
           sprite.setPosition(px.x, px.y);
           sprite.setDepth(depthForDynamic(last.y));
+          this.entityTilePositions.set(entityId, { x: last.x, y: last.y });
+          if (entityId === this.selfUserId) {
+            this.selfTilePosition = { x: last.x, y: last.y };
+          }
         }
         completed.push(entityId);
         continue;
       }
 
-      const idx = Math.floor(Math.max(0, tilesElapsed));
       const subTile = tilesElapsed - idx;
-      const startTile = idx === 0 ? state.from : (state.path[idx - 1] ?? state.from);
-      const endTile = state.path[idx];
+      const startTile = idx === 0 ? mstate.from : (mstate.path[idx - 1] ?? mstate.from);
+      const endTile = mstate.path[idx];
       if (!endTile) {
         completed.push(entityId);
         continue;
@@ -314,20 +541,108 @@ export class WorldScene extends Phaser.Scene {
 
     for (const id of completed) {
       this.entityMoveStates.delete(id);
+      if (id === this.selfUserId) {
+        this.checkPendingAttack();
+      }
     }
+
+    this.updateAllHpBarPositions();
+
+    if (this.pendingAttackTarget) {
+      this.checkPendingAttack();
+    }
+  }
+
+  private checkPendingAttack(): void {
+    if (!this.pendingAttackTarget || !this.connRef || !this.matchId) return;
+
+    const targetId = this.pendingAttackTarget;
+    const mobSprite = this.mobSprites.get(targetId);
+    if (!mobSprite || !mobSprite.active || mobSprite.alpha <= 0) {
+      this.pendingAttackTarget = null;
+      return;
+    }
+
+    const mobPos = this.entityTilePositions.get(targetId);
+    if (!mobPos) {
+      this.pendingAttackTarget = null;
+      return;
+    }
+
+    const manhattanDist =
+      Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y);
+    const now = this.time.now;
+
+    if (manhattanDist === 1) {
+      if (now - this.lastAttackRequestSentAt < 550) return;
+      this.lastAttackRequestSentAt = now;
+      this.clientSeq += 1;
+      const payload = JSON.stringify({
+        target_id: targetId,
+        client_seq: this.clientSeq,
+      });
+      this.connRef.socket
+        .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
+        .catch((err) => {
+          console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
+        });
+      return;
+    }
+
+    // If mob is already pathing toward us, stand still and let it come
+    if (this.isMobApproachingUs(targetId)) return;
+
+    if (now - this.lastApproachSentAt < 500) return;
+
+    if (this.selfUserId && this.entityMoveStates.has(this.selfUserId)) {
+      const moveState = this.entityMoveStates.get(this.selfUserId);
+      if (moveState && moveState.path.length > 0) {
+        const pathEnd = moveState.path[moveState.path.length - 1]!;
+        const endToMob =
+          Math.abs(pathEnd.x - mobPos.x) + Math.abs(pathEnd.y - mobPos.y);
+        if (endToMob > 1) {
+          this.sendApproachRequest(mobPos, now);
+        }
+      }
+    } else {
+      this.sendApproachRequest(mobPos, now);
+    }
+  }
+
+  private isMobApproachingUs(mobId: string): boolean {
+    const mobMoveState = this.entityMoveStates.get(mobId);
+    if (!mobMoveState || mobMoveState.path.length === 0) return false;
+    const mobPathEnd = mobMoveState.path[mobMoveState.path.length - 1]!;
+    const endToPlayer =
+      Math.abs(mobPathEnd.x - this.selfTilePosition.x) +
+      Math.abs(mobPathEnd.y - this.selfTilePosition.y);
+    return endToPlayer <= 1;
+  }
+
+  private sendApproachRequest(mobPos: Position, now: number): void {
+    if (!this.connRef || !this.matchId) return;
+    this.lastApproachSentAt = now;
+    const approachTile = this.findBestAdjacentTile(mobPos);
+    this.clientSeq += 1;
+    const payload = JSON.stringify({
+      target: approachTile,
+      client_seq: this.clientSeq,
+    });
+    this.connRef.socket
+      .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+      .catch((err) => {
+        console.warn(`sendMatchState MOVE_REQUEST (re-approach) failed`, err);
+      });
+  }
+
+  private getSpriteForEntity(entityId: string): Phaser.GameObjects.Sprite | undefined {
+    if (entityId === this.selfUserId) return this.player;
+    return this.otherPlayers.get(entityId) ?? this.mobSprites.get(entityId);
   }
 
   private tileCenterPx(tile: Position): { x: number; y: number } {
     const { sx, sy } = worldToScreen(tile.x, tile.y);
     return { x: sx + TILE_W_PX / 2, y: sy + TILE_H_PX / 2 };
-  }
-
-  private handleMoveRejected(payload: MoveRejected): void {
-    if (!payload) return;
-    console.warn(`[match MOVE_REJECTED] reason=${payload.reason} client_seq=${payload.client_seq}`);
-    // rate_limited → tichý, žádný UI toast (anti-spam UX, hráč obvykle jen klikal moc rychle).
-    if (payload.reason === 'rate_limited') return;
-    this.showMoveRejectedToast(payload.reason);
   }
 
   // === Sprite helpers =================================================
@@ -336,7 +651,7 @@ export class WorldScene extends Phaser.Scene {
     if (!entity?.id) return;
     if (entity.type !== 'player') return;
     if (entity.id === this.selfUserId) return;
-    if (this.otherPlayers.has(entity.id)) return; // re-snapshot / duplicate spawn
+    if (this.otherPlayers.has(entity.id)) return;
 
     const { x, y } = entity.position;
     const center = this.tileCenterPx({ x, y });
@@ -347,22 +662,228 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(depthForDynamic(y));
     if (entity.display_name) sprite.setData('displayName', entity.display_name);
     this.otherPlayers.set(entity.id, sprite);
+    this.entityTilePositions.set(entity.id, { x, y });
   }
 
-  // === Click-to-move ==================================================
+  private spawnMobIfNeeded(entity: WorldSnapshotEntity): void {
+    if (!entity?.id) return;
+    if (this.mobSprites.has(entity.id)) return;
+
+    const { x, y } = entity.position;
+    const center = this.tileCenterPx({ x, y });
+    const textureKey = MOB_TEXTURE_MAP[entity.mob_id ?? ''] ?? WOLF_KEY;
+
+    const sprite = this.add
+      .sprite(center.x, center.y, textureKey, FRAME_FACING_SE)
+      .setOrigin(0.5, 1)
+      .setDepth(depthForDynamic(y));
+
+    if (entity.display_name_cs) sprite.setData('displayName', entity.display_name_cs);
+    if (entity.level !== undefined) sprite.setData('level', entity.level);
+    const hpPct = entity.hp_pct ?? 1;
+
+    // Store hp_max for later updates. We infer from mob_id.
+    const hpMaxMap: Record<string, number> = { 'mob.wolf': 30, 'mob.giant_rat': 15 };
+    sprite.setData('hpMax', hpMaxMap[entity.mob_id ?? ''] ?? 30);
+
+    this.mobSprites.set(entity.id, sprite);
+    this.entityTilePositions.set(entity.id, { x, y });
+
+    if (hpPct < 1) {
+      this.createHpBar(entity.id, sprite, hpPct);
+    }
+  }
+
+  private spawnDropIfNeeded(entity: WorldSnapshotEntity): void {
+    if (!entity?.id) return;
+    if (this.dropSprites.has(entity.id)) return;
+
+    const { x, y } = entity.position;
+    const center = this.tileCenterPx({ x, y });
+
+    const sprite = this.add
+      .sprite(center.x, center.y, DROP_KEY)
+      .setOrigin(0.5, 0.5)
+      .setDepth(depthForDynamic(y) - 1);
+
+    this.dropSprites.set(entity.id, sprite);
+  }
+
+  // === HP Bar =========================================================
+
+  private createHpBar(entityId: string, sprite: Phaser.GameObjects.Sprite, hpPct: number): void {
+    const barW = 28;
+    const barH = 4;
+    const clamped = Math.max(0, Math.min(1, hpPct));
+    const barY = sprite.y - sprite.displayHeight - 4;
+    const bg = this.add
+      .rectangle(sprite.x - barW / 2, barY, barW, barH, 0x440000)
+      .setOrigin(0, 0)
+      .setDepth(sprite.depth + 1);
+    const fg = this.add
+      .rectangle(sprite.x - barW / 2, barY, barW * clamped, barH, 0x00cc00)
+      .setOrigin(0, 0)
+      .setDepth(sprite.depth + 2);
+
+    this.hpBars.set(entityId, { bg, fg, hpPct: clamped });
+  }
+
+  private updateHpBar(entityId: string, hpPct: number): void {
+    const clamped = Math.max(0, Math.min(1, hpPct));
+    const existing = this.hpBars.get(entityId);
+    if (existing) {
+      existing.hpPct = clamped;
+      existing.fg.width = 28 * clamped;
+      if (hpPct < 0.3) {
+        existing.fg.fillColor = 0xcc0000;
+      } else if (hpPct < 0.6) {
+        existing.fg.fillColor = 0xcccc00;
+      } else {
+        existing.fg.fillColor = 0x00cc00;
+      }
+    } else {
+      let sprite: Phaser.GameObjects.Sprite | undefined;
+      if (entityId === 'self') {
+        sprite = this.player;
+      } else {
+        sprite = this.mobSprites.get(entityId) ?? this.otherPlayers.get(entityId);
+      }
+      if (sprite) {
+        this.createHpBar(entityId === 'self' ? 'self' : entityId, sprite, hpPct);
+      }
+    }
+  }
+
+  private removeHpBar(entityId: string): void {
+    const bar = this.hpBars.get(entityId);
+    if (bar) {
+      bar.bg.destroy();
+      bar.fg.destroy();
+      this.hpBars.delete(entityId);
+    }
+  }
+
+  private updateAllHpBarPositions(): void {
+    for (const [entityId, bar] of this.hpBars) {
+      let sprite: Phaser.GameObjects.Sprite | undefined;
+      if (entityId === 'self') {
+        sprite = this.player;
+      } else {
+        sprite = this.mobSprites.get(entityId) ?? this.otherPlayers.get(entityId);
+      }
+      if (!sprite || !sprite.active) {
+        this.removeHpBar(entityId);
+        continue;
+      }
+      const barW = 28;
+      const barY = sprite.y - sprite.displayHeight - 4;
+      bar.bg.setPosition(sprite.x - barW / 2, barY);
+      bar.fg.setPosition(sprite.x - barW / 2, barY);
+      bar.bg.setDepth(sprite.depth + 1);
+      bar.fg.setDepth(sprite.depth + 2);
+    }
+  }
+
+  // === Floating text ==================================================
+
+  private showFloatingText(x: number, y: number, text: string, color: string): void {
+    const floatText = this.add
+      .text(x, y, text, {
+        fontSize: '14px',
+        fontStyle: 'bold',
+        color,
+        stroke: '#000000',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(100_001);
+
+    this.tweens.add({
+      targets: floatText,
+      y: y - 30,
+      alpha: 0,
+      duration: 800,
+      ease: 'Linear',
+      onComplete: () => floatText.destroy(),
+    });
+  }
+
+  private showToast(message: string, color: string): void {
+    const cx = this.scale.width / 2;
+    const toast = this.add
+      .text(cx, 90, message, {
+        fontSize: '16px',
+        color,
+        backgroundColor: '#00000080',
+        padding: { x: 8, y: 4 },
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(100_001);
+
+    this.tweens.add({
+      targets: toast,
+      alpha: 0,
+      duration: 2000,
+      ease: 'Linear',
+      onComplete: () => toast.destroy(),
+    });
+  }
+
+  // === Click-to-move / click-to-attack ================================
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {
-    // Hrubý HUD click-shield. Lepší řešení (depth-based picking nebo proper
-    // hit-region) v Phase 17 UI polish.
     if (pointer.x < HUD_GUARD_W && pointer.y < HUD_GUARD_H) return;
-
     if (!this.connRef || !this.matchId) return;
 
-    // pointer.worldX/worldY — screen coords transformované přes camera scroll/zoom.
-    // pointer.x/y by selhalo, jakmile se kamera pohnula (camera.startFollow).
     const tile = screenToTile(pointer.worldX, pointer.worldY);
     if (!Number.isFinite(tile.x) || !Number.isFinite(tile.y)) return;
 
+    // Check if clicking on or near a mob
+    const targetMobId = this.findMobAtTile(tile.x, tile.y);
+    if (targetMobId) {
+      const mobPos = this.entityTilePositions.get(targetMobId);
+      const manhattanDist = mobPos
+        ? Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y)
+        : Infinity;
+
+      if (manhattanDist === 1) {
+        // In range (adjacent) — attack immediately, keep target for continuous combat
+        this.pendingAttackTarget = targetMobId;
+        this.lastAttackRequestSentAt = this.time.now;
+        this.clientSeq += 1;
+        const payload = JSON.stringify({
+          target_id: targetMobId,
+          client_seq: this.clientSeq,
+        });
+        this.connRef.socket
+          .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
+          .catch((err) => {
+            console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
+          });
+      } else if (mobPos) {
+        // Out of range — set target; approach only if mob isn't already coming to us
+        this.pendingAttackTarget = targetMobId;
+        if (!this.isMobApproachingUs(targetMobId)) {
+          this.lastApproachSentAt = this.time.now;
+          const approachTile = this.findBestAdjacentTile(mobPos);
+          this.clientSeq += 1;
+          const payload = JSON.stringify({
+            target: approachTile,
+            client_seq: this.clientSeq,
+          });
+          this.connRef.socket
+            .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+            .catch((err) => {
+              console.warn(`sendMatchState MOVE_REQUEST (approach) failed`, err);
+            });
+        }
+      }
+      return;
+    }
+
+    // Default: move request (cancel pending attack)
+    this.pendingAttackTarget = null;
     this.clientSeq += 1;
     const matchId = this.matchId;
     const conn = this.connRef;
@@ -375,6 +896,35 @@ export class WorldScene extends Phaser.Scene {
     conn.socket.sendMatchState(matchId, Op.MOVE_REQUEST, payload).catch((err) => {
       console.warn(`sendMatchState MOVE_REQUEST seq=${seq} failed`, err);
     });
+  }
+
+  private findBestAdjacentTile(mobPos: Position): Position {
+    const cardinalOffsets = [
+      { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 },
+    ];
+    let best = { x: mobPos.x, y: mobPos.y - 1 };
+    let bestDist = Infinity;
+    for (const off of cardinalOffsets) {
+      const tx = mobPos.x + off.x;
+      const ty = mobPos.y + off.y;
+      const dist = Math.abs(this.selfTilePosition.x - tx) + Math.abs(this.selfTilePosition.y - ty);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = { x: tx, y: ty };
+      }
+    }
+    return best;
+  }
+
+  private findMobAtTile(tileX: number, tileY: number): string | null {
+    for (const [entityId, pos] of this.entityTilePositions) {
+      if (!this.mobSprites.has(entityId)) continue;
+      if (pos.x === tileX && pos.y === tileY) {
+        const sprite = this.mobSprites.get(entityId);
+        if (sprite && sprite.active && sprite.alpha > 0) return entityId;
+      }
+    }
+    return null;
   }
 
   private showMoveRejectedToast(reason: string): void {
@@ -419,10 +969,8 @@ export class WorldScene extends Phaser.Scene {
     if (!layer) {
       throw new Error(`Layer "${TERRAIN_LAYER_NAME}" nenalezen v ${MAP_KEY}.tmj`);
     }
-    layer.setDepth(0); // terrain band per ADR-018
+    layer.setDepth(0);
 
-    // Camera bounds: pro iso mapu W×H je x rozsah [-(H-1)·tw/2, W·tw/2 + tw/2],
-    // y rozsah [0, (W+H)·th/2]. Phaser layer.x/y už zahrnuje (0,0) tile bbox top-left.
     const halfW = TILE_W_PX / 2;
     const halfH = TILE_H_PX / 2;
     const minX = -(map.height - 1) * halfW;
@@ -435,13 +983,12 @@ export class WorldScene extends Phaser.Scene {
   private spawnPlayer(profile: PlayerProfile): void {
     const { x, y } = profile.player_state.current_position;
     const center = this.tileCenterPx({ x, y });
-    // Phaser ISOMETRIC tilemap renderuje tile (x,y) tak, že bounding box top-left
-    // je na worldToScreen(x,y). Diamond center = +TW/2 vodorovně, +TH/2 svisle.
-    // Sprite s origin (0.5, 1) → feet anchor sedí v diamond centru.
     this.player = this.add
       .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
       .setOrigin(0.5, 1)
       .setDepth(depthForDynamic(y));
+    this.player.setData('hpMax', profile.player_state.hp_max ?? 10);
+    this.selfTilePosition = { x, y };
 
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
   }
@@ -461,22 +1008,27 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private onResize(): void {
-    // Phaser Scale.RESIZE už upravuje renderer; HUD je ScrollFactor 0, takže
-    // zůstává v levém horním rohu automaticky. Camera bounds drží beze změny.
+    // Phaser Scale.RESIZE handled automatically
   }
 
   private onShutdown(): void {
     this.scale.off('resize', this.onResize, this);
     this.input.off('pointerdown', this.handlePointerDown, this);
 
-    // Cleanup ostatní hráče + UI tweens (toast fadeOut atd.). Movement state
-    // je čistě data, žádné tweens pro pohyb (deterministic update loop per ADR-019).
     this.tweens.killAll();
     this.entityMoveStates.clear();
-    for (const sprite of this.otherPlayers.values()) {
-      sprite.destroy();
-    }
+    for (const sprite of this.otherPlayers.values()) sprite.destroy();
     this.otherPlayers.clear();
+    for (const sprite of this.mobSprites.values()) sprite.destroy();
+    this.mobSprites.clear();
+    for (const sprite of this.dropSprites.values()) sprite.destroy();
+    this.dropSprites.clear();
+    for (const bar of this.hpBars.values()) {
+      bar.bg.destroy();
+      bar.fg.destroy();
+    }
+    this.hpBars.clear();
+    this.entityTilePositions.clear();
 
     if (this.rejectToast) {
       this.rejectToast.destroy();
@@ -486,9 +1038,8 @@ export class WorldScene extends Phaser.Scene {
     this.player = undefined;
     this.selfUserId = undefined;
     this.clientSeq = 0;
+    this.pendingAttackTarget = null;
 
-    // Best-effort match cleanup. Socket může být disconnected (např. když shutdown
-    // přišel z ondisconnect handleru) → leaveMatch hodí, fire-and-forget.
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;
       const conn = this.connRef;

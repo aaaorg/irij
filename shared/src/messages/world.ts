@@ -12,6 +12,10 @@ export interface EntitySpawned {
   position: Position;
   display_name?: string; // jen pro type='player' (HUD label)
   hp_pct?: number; // 0..1, jen pro entity s HP barem
+  mob_id?: string; // jen pro type='mob' — klíč do mob definitions (pro sprite lookup)
+  display_name_cs?: string; // jen pro type='mob' — lokalizovaný název
+  level?: number; // jen pro type='mob' — pro HP bar label
+  items?: Array<{ item_id: string; quantity: number }>; // jen pro type='drop'
 }
 
 // Op.ENTITY_DESPAWNED (71) — server → klient broadcast.

@@ -4,7 +4,7 @@
 export const TICK_HZ = 10;
 export const TICK_MS = 1000 / TICK_HZ; // 100 ms
 
-export const COMBAT_TICK_INTERVAL = 3; // 3 master ticks = 300 ms
+export const COMBAT_TICK_INTERVAL = 6; // 6 master ticks = 600 ms (OSRS tempo per G1 decision)
 export const AI_TICK_INTERVAL = 5; // 5 master ticks = 500 ms
 export const RESOURCE_RESPAWN_CHECK_INTERVAL = 150; // 15 s
 export const PLAYER_AUTOSAVE_INTERVAL = 300; // 30 s
@@ -60,6 +60,12 @@ export const REPUTATION_DEFAULT = 100;
 export const HOMESICKNESS_DURATION_MS = 10 * 60 * 1000;
 export const HOMESICKNESS_XP_PENALTY_PCT = 25;
 export const HOMESICKNESS_DAMAGE_PENALTY_PCT = 15;
+
+// Combat
+export const MELEE_RANGE_TILES = 1;
+export const ATTACK_RATE_LIMIT_MAX = 4; // max 4 ATTACK_REQUEST per second
+export const DROP_DESPAWN_TICKS = 6000; // 10 minutes at 10 Hz
+export const MOB_RESPAWN_CHECK_INTERVAL = 10; // check every 1 s
 
 // Network
 export const HEARTBEAT_INTERVAL_MS = 15_000;

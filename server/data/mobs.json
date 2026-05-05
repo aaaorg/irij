@@ -1,0 +1,56 @@
+[
+  {
+    "id": "mob.wolf",
+    "name_cs": "Vlk",
+    "name_en": "Wolf",
+    "appearance_id": "sprite.mob.wolf",
+    "level": 5,
+    "stats": {
+      "hp_max": 30,
+      "damage_min": 2,
+      "damage_max": 5,
+      "attack_speed_ticks": 6,
+      "defense_melee": 3,
+      "defense_ranged": 1,
+      "defense_magic": 0,
+      "weapon_class": "melee",
+      "movement_speed_tps": 2.5,
+      "range_tiles": 1
+    },
+    "ai_behavior": "aggressive_basic",
+    "loot_table_id": "loot.wolf",
+    "xp_award": { "melee": 35, "vitality": 10 },
+    "aggro_radius_tiles": 5,
+    "leash_radius_tiles": 15,
+    "level_aggro_threshold": 10,
+    "respawn_min_s": 60,
+    "respawn_max_s": 180
+  },
+  {
+    "id": "mob.giant_rat",
+    "name_cs": "Obří Krysa",
+    "name_en": "Giant Rat",
+    "appearance_id": "sprite.mob.giant_rat",
+    "level": 2,
+    "stats": {
+      "hp_max": 15,
+      "damage_min": 1,
+      "damage_max": 3,
+      "attack_speed_ticks": 6,
+      "defense_melee": 1,
+      "defense_ranged": 0,
+      "defense_magic": 0,
+      "weapon_class": "melee",
+      "movement_speed_tps": 2.0,
+      "range_tiles": 1
+    },
+    "ai_behavior": "aggressive_basic",
+    "loot_table_id": "loot.giant_rat",
+    "xp_award": { "melee": 15, "vitality": 5 },
+    "aggro_radius_tiles": 4,
+    "leash_radius_tiles": 12,
+    "level_aggro_threshold": 10,
+    "respawn_min_s": 30,
+    "respawn_max_s": 90
+  }
+]

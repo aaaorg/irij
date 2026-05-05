@@ -63,6 +63,10 @@ export interface WorldSnapshotEntity {
   position: Position;
   hp_pct?: number;
   display_name?: string;
+  mob_id?: string; // jen pro type='mob'
+  display_name_cs?: string; // jen pro type='mob'
+  level?: number; // jen pro type='mob'
+  items?: Array<{ item_id: string; quantity: number }>; // jen pro type='drop'
   // Path-in-flight data, present jen když entity je uprostřed pohybu.
   path?: Position[];
   speed_tps?: number;

@@ -447,7 +447,7 @@
 
 ## Sekce G — Game design rozhodnutí (před Phase 6)
 
-### G1 — Combat tick rate decision (P0 — needs Jakub call)
+### G1 — Combat tick rate decision (P0 — needs Jakub call) ✅ Rozhodnuto: 600 ms
 
 - **Source:** Game Designer, Mobile/PWA, Networking.
 - **Why:** Plán 0.3-0.4 s. OSRS 0.6 s, Tibia 1 s, Highspell ~0.6 s. Mobile RTT 50-150 ms na 4G sežere 30-50 % tvého ticku, anti-cheat tick-skip detekce je peklo. Game Designer důrazně doporučuje 0.6 s.
@@ -458,7 +458,7 @@
 - **Verify:** —
 - **Effort:** N/A (rozhodnutí, ne kód).
 
-### G2 — Sprite směr MVP cut: 4 iso místo 8 (P1)
+### G2 — Sprite směr MVP cut: 4 iso místo 8 (P1) ✅ Rozhodnuto: 4 směry pro MVP
 
 - **Source:** Art Director.
 - **Why:** ADR-020 sprite plán = 8 směrů × ≥4 framy idle/walk × N postavy ≈ ~6900 framů per character template. Nereálné pro sólo dev v Phase 18 polish.
@@ -469,7 +469,7 @@
 - **Verify:** —
 - **Effort:** N/A (rozhodnutí + krátký ADR update).
 
-### G3 — Druhý mob v Phase 6 scope (P1)
+### G3 — Druhý mob v Phase 6 scope (P1) ✅ Rozhodnuto: Obří Krysa (melee)
 
 - **Source:** Game Designer.
 - **Why:** "1 mob v MVP" nestačí — vlk samotný = 30 min content, druhý mob s ranged dropem testuje damage types + AI patterns.

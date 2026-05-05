@@ -20,6 +20,7 @@
 
 import { BROADCAST_CHUNK_RADIUS, CHUNK_SIZE_TILES } from 'irij-shared/constants';
 import type { Position } from 'irij-shared/types';
+import type { AiState, LootTable, MobDefinition } from 'irij-shared/types';
 import type { WalkableMask } from './walkable.js';
 
 export interface PlayerPresenceState {
@@ -42,16 +43,49 @@ export interface PlayerPresenceState {
   clientSeq: number;
 }
 
+export interface MobInstanceState {
+  instanceId: string;
+  mobId: string;
+  position: Position;
+  spawnPosition: Position;
+  hpCurrent: number;
+  hpMax: number;
+  aiState: AiState;
+  targetUserId: string | null;
+  lastAttackTick: number;
+  lastChunk: string;
+  path: Position[];
+  pathStartedAt: number;
+  pathConsumed: number;
+  deathTick: number | null;
+  respawnAtTick: number | null;
+  leashRadiusTiles: number;
+  speedTps: number;
+}
+
+export interface DropInstanceState {
+  dropId: string;
+  position: Position;
+  items: Array<{ item_id: string; quantity: number }>;
+  droppedAtTick: number;
+  lastChunk: string;
+}
+
 export interface WorldMatchState {
   tick: number;
   walkable: WalkableMask;
-  // Plain object místo Map kvůli Goja state-serializaci mezi callbacks.
   presencesByUserId: { [userId: string]: PlayerPresenceState };
-  // Plain object místo Map<string, Set<string>>; vnitřní set je Record<userId, true>.
   presencesByChunk: { [chunkKey: string]: { [userId: string]: true } };
-  // 4b: per-userId timestampy posledních N MOVE_REQUESTů (ms epoch). Sliding window
-  // pro rate limit 10/s. Trim probíhá při každém checku v handleMoveRequest.
   moveRequestLog: { [userId: string]: number[] };
+  attackRequestLog: { [userId: string]: number[] };
+  // Phase 6: mob & combat state
+  mobDefinitions: { [mobId: string]: MobDefinition };
+  lootTables: { [tableId: string]: LootTable };
+  mobInstances: { [instanceId: string]: MobInstanceState };
+  mobsByChunk: { [chunkKey: string]: { [instanceId: string]: true } };
+  dropInstances: { [dropId: string]: DropInstanceState };
+  dropsByChunk: { [chunkKey: string]: { [dropId: string]: true } };
+  combatEngagements: { [userId: string]: string | null };
 }
 
 export function chunkKeyOf(pos: Position): string {
@@ -149,6 +183,99 @@ export function recipientsInRangeOfChunk(
     for (const userId of Object.keys(bucket)) {
       const ps = state.presencesByUserId[userId];
       if (ps) result.push(ps.presence);
+    }
+  }
+  return result;
+}
+
+// === Mob chunk index helpers ============================================
+
+export function addMobToChunk(
+  state: WorldMatchState,
+  instanceId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const bucket = { ...(state.mobsByChunk[key] ?? {}) };
+  bucket[instanceId] = true;
+  state.mobsByChunk[key] = bucket;
+}
+
+export function removeMobFromChunk(
+  state: WorldMatchState,
+  instanceId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const existing = state.mobsByChunk[key];
+  if (!existing) return;
+  const bucket = { ...existing };
+  delete bucket[instanceId];
+  if (Object.keys(bucket).length === 0) {
+    delete state.mobsByChunk[key];
+  } else {
+    state.mobsByChunk[key] = bucket;
+  }
+}
+
+export function moveMobBetweenChunks(
+  state: WorldMatchState,
+  instanceId: string,
+  oldPos: Position,
+  newPos: Position,
+): void {
+  const oldKey = chunkKeyOf(oldPos);
+  const newKey = chunkKeyOf(newPos);
+  if (oldKey === newKey) return;
+  removeMobFromChunk(state, instanceId, oldPos);
+  addMobToChunk(state, instanceId, newPos);
+}
+
+// === Drop chunk index helpers ===========================================
+
+export function addDropToChunk(
+  state: WorldMatchState,
+  dropId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const bucket = { ...(state.dropsByChunk[key] ?? {}) };
+  bucket[dropId] = true;
+  state.dropsByChunk[key] = bucket;
+}
+
+export function removeDropFromChunk(
+  state: WorldMatchState,
+  dropId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const existing = state.dropsByChunk[key];
+  if (!existing) return;
+  const bucket = { ...existing };
+  delete bucket[dropId];
+  if (Object.keys(bucket).length === 0) {
+    delete state.dropsByChunk[key];
+  } else {
+    state.dropsByChunk[key] = bucket;
+  }
+}
+
+// === Mob query helpers ==================================================
+
+export function getMobsInChunkArea(
+  state: WorldMatchState,
+  fromChunk: string,
+  radius: number = BROADCAST_CHUNK_RADIUS,
+): MobInstanceState[] {
+  const result: MobInstanceState[] = [];
+  for (const chunkKey of Object.keys(state.mobsByChunk)) {
+    if (chunkDistance(fromChunk, chunkKey) > radius) continue;
+    const bucket = state.mobsByChunk[chunkKey];
+    if (!bucket) continue;
+    for (const instanceId of Object.keys(bucket)) {
+      const mob = state.mobInstances[instanceId];
+      if (mob) result.push(mob);
     }
   }
   return result;
