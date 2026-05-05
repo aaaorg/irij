@@ -21,11 +21,10 @@ import type {
   WorldSnapshot,
   WorldSnapshotEntity,
 } from 'irij-shared/messages';
-import type { Player, PlayerState } from 'irij-shared/types';
+import { asPlayer, asPlayerState } from 'irij-shared/types';
 
-// Mapa je bundlnutá do server modulu přes esbuild .tmj loader (build.js).
-// Single source of truth — klient i server čtou stejný soubor, žádný drift.
 import mapJson from '../../../client/public/maps/test_50x50.tmj';
+import { log } from '../lib/log.js';
 import {
   addPresenceToChunk,
   broadcastToChunkArea,
@@ -52,9 +51,12 @@ export function matchInit(
   const walkable = maskFromTiledMap(mapJson as any);
   const total = walkable.width * walkable.height;
   const w = countWalkable(walkable);
-  logger.info(
-    `World match init: ${walkable.width}×${walkable.height} tiles, walkable ${w}/${total}`,
-  );
+  log(logger, 'info', 'World match init', {
+    width: walkable.width,
+    height: walkable.height,
+    walkable: w,
+    total,
+  });
   const state: WorldMatchState = {
     tick: 0,
     walkable,
@@ -79,9 +81,7 @@ export function matchJoinAttempt(
   presence: nkruntime.Presence,
   _metadata: { [key: string]: any },
 ): { state: WorldMatchState; accept: boolean } {
-  // 4a: accept all — auth check je presumed validní z find_or_create_match RPC flow.
-  // 4b/post-MVP: anti-double-join (stejný userId již v matchi → reject), capacity cap.
-  logger.debug(`Join attempt by ${presence.userId}`);
+  log(logger, 'debug', 'Join attempt', { userId: presence.userId });
   return { state, accept: true };
 }
 
@@ -104,15 +104,19 @@ export function matchJoin(
     const playerObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER);
     const stateObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_STATE);
     if (!playerObj || !stateObj) {
-      logger.warn(
-        `matchJoin: Player/PlayerState blob missing for ${userId} — kicking. Klient by měl projít přes CharacterCreationScene před joinMatch.`,
-      );
+      log(logger, 'warn', 'matchJoin: blob missing, kicking', { userId });
       dispatcher.matchKick([presence]);
       continue;
     }
 
-    const player = playerObj.value as Player;
-    const pState = stateObj.value as PlayerState;
+    const player = asPlayer(playerObj.value);
+    const pState = asPlayerState(stateObj.value);
+    if (!player || !pState) {
+      log(logger, 'warn', 'matchJoin: blob narrowing failed, kicking', { userId });
+      dispatcher.matchKick([presence]);
+      continue;
+    }
+
     const position = pState.current_position ?? { ...DEFAULT_SPAWN_POSITION };
     const displayName = player.display_name ?? userId.slice(0, 8);
     const hpCurrent = pState.hp_current ?? DEFAULT_HP;
@@ -127,7 +131,6 @@ export function matchJoin(
       hpMax,
       lastChunk,
       joinedAt: Date.now(),
-      // 4b: žádný aktivní path při join (hráč se spawnuje statický).
       path: [],
       pathStartedAt: 0,
       pathConsumed: 0,
@@ -137,20 +140,12 @@ export function matchJoin(
     state.presencesByUserId[userId] = ps;
     addPresenceToChunk(state, userId, position);
 
-    // 1) Joiner-only WORLD_SNAPSHOT — všechny entity v jeho 3×3 chunkovém okolí
-    //    KROMĚ self (joiner už ví, kde je sám). V 4a jsou to jen ostatní hráči
-    //    (mobi/drops přijdou v Phase 6+).
     const visibleEntities: WorldSnapshotEntity[] = [];
     const recipientsInArea = recipientsInRangeOfChunk(state, lastChunk);
     for (const recipient of recipientsInArea) {
       if (recipient.userId === userId) continue;
       const other = state.presencesByUserId[recipient.userId];
       if (!other) continue;
-      // Per ADR-019: pokud je entity uprostřed pohybu, vlož current position
-      // (ne stale ps.position) + zbytek path + speed_tps + recomputed start tick
-      // tak, aby joiner zrekonstruoval TweenChain z perspektivy "current sub-path"
-      // a viděl entity v plynulém pohybu, ne stojící na starém tile dokud se
-      // znovu nehne.
       const inFlight = other.path && other.path.length > 0;
       const currentPosition = inFlight
         ? computeCurrentPosition(other, state.tick)
@@ -163,11 +158,6 @@ export function matchJoin(
         display_name: other.displayName,
       };
       if (inFlight) {
-        // Slice path od aktuální mid-path pozice až po konec původního path.
-        // Server tracká `path` jako "zbytek od posledního advance" (po
-        // matchLoop popnutí), ale computeCurrentPosition může zahrnovat ještě
-        // nepopnuté kroky (tilesAdvanced > pathConsumed). Slice odpovídajícího
-        // suffixu:
         const ticksElapsed = state.tick - other.pathStartedAt;
         const tilesShouldHaveMoved = Math.floor(
           (ticksElapsed * MOVEMENT_SPEED_TPS_BASE) / TICK_HZ,
@@ -182,7 +172,6 @@ export function matchJoin(
         if (remainingPath.length > 0) {
           entry.path = remainingPath;
           entry.speed_tps = MOVEMENT_SPEED_TPS_BASE;
-          // Z perspektivy joinera: path začíná NYNÍ (state.tick) z currentPosition.
           entry.started_at_tick = state.tick;
         }
       }
@@ -194,7 +183,6 @@ export function matchJoin(
     };
     dispatcher.broadcastMessage(Op.WORLD_SNAPSHOT, JSON.stringify(snapshot), [presence]);
 
-    // 2) Broadcast ENTITY_SPAWNED ostatním ve 3×3 okolí (joiner sám v snapshotu už je).
     const spawnPayload: EntitySpawned = {
       entity_id: userId,
       type: 'player',
@@ -204,9 +192,13 @@ export function matchJoin(
     };
     broadcastToChunkArea(dispatcher, state, lastChunk, Op.ENTITY_SPAWNED, spawnPayload, userId);
 
-    logger.info(
-      `matchJoin: ${displayName} (${userId.slice(0, 8)}) at (${position.x},${position.y}) chunk=${lastChunk}; visible others=${visibleEntities.length}`,
-    );
+    log(logger, 'info', 'matchJoin', {
+      displayName,
+      userId: userId.slice(0, 8),
+      position,
+      chunk: lastChunk,
+      visibleOthers: visibleEntities.length,
+    });
   }
 
   return { state };
@@ -221,16 +213,11 @@ export function matchLeave(
   state: WorldMatchState,
   presences: nkruntime.Presence[],
 ): { state: WorldMatchState } {
-  // Phase 4a: cleanup in-memory state + ENTITY_DESPAWNED broadcast.
-  // Player blob autosave přijde v Phase 5 (PLAYER_AUTOSAVE_INTERVAL + final flush
-  // tady). Bez autosave teď current_position v DB zůstane na hodnotě, kterou tam
-  // vepsal profileCreateCharacter — to je pro 4a OK, hráč se vždycky spawnuje na
-  // crossroads (25,25). Movement = 4b, persistence = 5.
   for (const presence of presences) {
     const userId = presence.userId;
     const ps = state.presencesByUserId[userId];
     if (!ps) {
-      logger.debug(`matchLeave: ${userId} not in state, skipping`);
+      log(logger, 'debug', 'matchLeave: not in state', { userId });
       continue;
     }
 
@@ -252,7 +239,10 @@ export function matchLeave(
       state.moveRequestLog = nextLog;
     }
 
-    logger.info(`matchLeave: ${ps.displayName} (${userId.slice(0, 8)}) — cleanup ok`);
+    log(logger, 'info', 'matchLeave', {
+      displayName: ps.displayName,
+      userId: userId.slice(0, 8),
+    });
   }
   return { state };
 }
@@ -268,14 +258,8 @@ export function matchLoop(
 ): { state: WorldMatchState } {
   state.tick = tick;
 
-  // 1) Zpracuj příchozí zprávy. V 4b jen Op.MOVE_REQUEST; další opcodes (combat
-  //    request, attack, gather, ...) přijdou v Phase 6+.
   for (const msg of messages) {
     if (msg.opCode === Op.MOVE_REQUEST) {
-      // nakama-common typuje msg.data jako ArrayBuffer, ale Goja runtime ji
-      // skutečně doručuje jako string (klient posílá JSON.stringify(...)).
-      // Held-nose double-cast přes unknown — pokud by někdy začal chodit
-      // ArrayBuffer, defenzivně dekódujeme.
       const raw = msg.data as unknown;
       let text: string;
       if (typeof raw === 'string') {
@@ -291,14 +275,8 @@ export function matchLoop(
         broadcastMoveRejected(dispatcher, msg.sender, result.reason, result.clientSeq);
       }
     }
-    // Ostatní opcodes ignoruje 4b — server logger.debug by zaplevelilo log.
   }
 
-  // 2) Advance server-side position state (chunk index, ps.position) podle
-  //    aktivních paths. ENTITY_MOVED se v tomto loopu NEbroadcastuje — per
-  //    ADR-019 to dělá handleMoveRequest jednou s celou path; klient lokálně
-  //    lerpuje. Combat tick (Phase 6), AI tick (Phase 6), autosave (Phase 5)
-  //    přijdou jako counters proti master 10 Hz tick.
   advanceMovement(state, dispatcher, tick);
 
   return { state };
@@ -314,11 +292,8 @@ export function matchTerminate(
   _graceSeconds: number,
 ): { state: WorldMatchState } {
   const userIds = Object.keys(state.presencesByUserId);
-  logger.info(`Match terminating; ${userIds.length} presences in state — broadcasting despawns`);
+  log(logger, 'info', 'Match terminating', { presenceCount: userIds.length });
 
-  // Phase 5 doplní autosave Player blobu do Storage před despawnem (current_position,
-  // last_logout_at, atd.). Pro 4b jen oznámíme klientům despawn, aby si vyčistili
-  // sprite cache místo "duch" zůstávajícího v okolí.
   for (const userId of userIds) {
     const ps = state.presencesByUserId[userId];
     if (!ps) continue;

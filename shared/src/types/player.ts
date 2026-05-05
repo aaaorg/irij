@@ -118,3 +118,31 @@ export interface PlayerState {
   death_debuff_expires_at: string | null;
   last_logout_at: string;
 }
+
+// Runtime narrowing helpers — use after storageRead instead of `as Player` casts.
+
+export function asPlayer(value: unknown): Player | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.schema_version !== 'number') return null;
+  if (typeof v.id !== 'string') return null;
+  if (typeof v.username !== 'string') return null;
+  if (typeof v.display_name !== 'string') return null;
+  if (v.gender !== 'M' && v.gender !== 'F') return null;
+  if (!v.appearance || typeof v.appearance !== 'object') return null;
+  if (typeof v.total_xp !== 'number') return null;
+  return value as Player;
+}
+
+export function asPlayerState(value: unknown): PlayerState | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.schema_version !== 'number') return null;
+  if (typeof v.current_zone_id !== 'string') return null;
+  if (!v.current_position || typeof v.current_position !== 'object') return null;
+  const pos = v.current_position as Record<string, unknown>;
+  if (typeof pos.x !== 'number' || typeof pos.y !== 'number') return null;
+  if (typeof v.hp_current !== 'number') return null;
+  if (typeof v.hp_max !== 'number') return null;
+  return value as PlayerState;
+}

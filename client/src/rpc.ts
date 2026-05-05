@@ -1,10 +1,16 @@
 // Tenký wrapper kolem Nakama client.rpc — typovaná request/response, JSON wire format.
 // Profile / auth RPCs volají odsud; match data jdou jinou cestou (socket.sendMatchState).
-//
-// nakama-js client.rpc(session, id, input) interně dělá JSON.stringify(input) a JSON.parse(response.payload),
-// takže pracujeme přímo s JS objekty — žádný manual marshal.
 
 import type { NakamaConnection } from './nakama.js';
+
+export interface RpcErrorInfo {
+  code: string;
+  message: string;
+}
+
+export type RpcResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: RpcErrorInfo };
 
 export async function callRpc<TReq extends object, TRes>(
   conn: NakamaConnection,
@@ -16,4 +22,42 @@ export async function callRpc<TReq extends object, TRes>(
     throw new Error(`RPC ${name} vrátilo prázdnou odpověď`);
   }
   return result.payload as TRes;
+}
+
+export async function callRpcSafe<TReq extends object, TRes>(
+  conn: NakamaConnection,
+  name: string,
+  payload: TReq,
+): Promise<RpcResult<TRes>> {
+  try {
+    const data = await callRpc<TReq, TRes>(conn, name, payload);
+    return { ok: true, data };
+  } catch (err: unknown) {
+    const info = parseRpcError(err);
+    return { ok: false, error: info };
+  }
+}
+
+function parseRpcError(err: unknown): RpcErrorInfo {
+  if (err && typeof err === 'object') {
+    const e = err as Record<string, unknown>;
+    if (typeof e.message === 'string') {
+      // Nakama JS client wraps gRPC errors with message containing the thrown error message.
+      // The server RpcError.code is embedded in the error message.
+      const msg = e.message;
+      return { code: extractErrorCode(msg), message: msg };
+    }
+  }
+  return { code: 'unknown', message: String(err) };
+}
+
+function extractErrorCode(message: string): string {
+  // Nakama gRPC errors come as "code: message" or just the error message.
+  // RpcError on server throws with message = code, so the gRPC error message IS the code.
+  const trimmed = message.trim();
+  if (/^[a-z_]+$/.test(trimmed)) return trimmed;
+  // Fallback: try to extract from structured format
+  const match = /^([a-z_]+):\s/.exec(trimmed);
+  if (match?.[1]) return match[1];
+  return 'unknown';
 }
