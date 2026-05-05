@@ -258,7 +258,7 @@
 
 ## Sekce D — Validation & error handling (Phase 4.5/5)
 
-### D1 — Tenký zod-like validator v `shared/` (P1)
+### D1 — Tenký zod-like validator v `shared/` (P1) ✅ PR #25
 
 - **Source:** Backend, Tech Lead.
 - **Why:** RPC validace je ad-hoc, duplikovaná, `typeof` checks. Phase 6+ (combat, inventory, trade) explodují na 10× duplikovanou logiku.
@@ -270,7 +270,7 @@
 - **Verify:** unit test schémata + replacement RPC handler test.
 - **Effort:** ~3 h.
 
-### D2 — RPC throw + typed error code (P1)
+### D2 — RPC throw + typed error code (P1) ✅ PR #25
 
 - **Source:** Backend, Nakama specialist.
 - **Why:** `errorResponse('username_taken')` vrací 200 OK + `{ok:false}` body. Klient si parsuje string. Nakama-native throw + `Error` s `code` mapuje na HTTP/RPC error → klient čistě rozliší success/failure status, log severity správný.
@@ -285,7 +285,7 @@
 - **Verify:** explicit RPC error case test (např. duplicate username) → klient dostane HTTP 400 + parsed code.
 - **Effort:** ~3 h.
 
-### D3 — Storage blob runtime narrowing (P1)
+### D3 — Storage blob runtime narrowing (P1) ✅ PR #25
 
 - **Source:** Backend.
 - **Why:** `as Player` casty po `storageRead` bez runtime ověření = silent crash 10 minut později.
@@ -297,7 +297,7 @@
 - **Verify:** unit test asPlayer s valid + invalid + missing fields.
 - **Effort:** ~1.5 h.
 
-### D4 — Structured logging bridge (P2)
+### D4 — Structured logging bridge (P2) ✅ PR #25
 
 - **Source:** Backend.
 - **Why:** `printf`-style log se neparsuje pro Loki/Grafana pipeline (Phase 21).
@@ -308,7 +308,7 @@
 - **Verify:** grep zbylé `${` v logger calls, hand-migrate.
 - **Effort:** ~1 h.
 
-### D5 — Transactionally-safe presence helper (P1)
+### D5 — Transactionally-safe presence helper (P1) ✅ PR #25
 
 - **Source:** Backend, Tech Lead.
 - **Why:** `addPresenceToChunk` + `removePresenceFromChunk` jsou dva separátní spread-reassigny → potenciální Goja invariant break. Konzistentní rule: jeden top-level reassign.

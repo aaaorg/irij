@@ -20,7 +20,6 @@
 
 import { BROADCAST_CHUNK_RADIUS, CHUNK_SIZE_TILES } from 'irij-shared/constants';
 import type { Position } from 'irij-shared/types';
-import type { TickCounters } from './scheduler.js';
 import type { WalkableMask } from './walkable.js';
 
 export interface PlayerPresenceState {
@@ -53,7 +52,6 @@ export interface WorldMatchState {
   // 4b: per-userId timestampy posledních N MOVE_REQUESTů (ms epoch). Sliding window
   // pro rate limit 10/s. Trim probíhá při každém checku v handleMoveRequest.
   moveRequestLog: { [userId: string]: number[] };
-  tickCounters: TickCounters;
 }
 
 export function chunkKeyOf(pos: Position): string {
@@ -115,6 +113,24 @@ export function movePresenceBetweenChunks(
   if (oldKey === newKey) return;
   removePresenceFromChunk(state, userId, oldPos);
   addPresenceToChunk(state, userId, newPos);
+}
+
+// D5: Transactionally-safe presence location update. Reassigns both
+// presencesByUserId and presencesByChunk in a single pass — avoids Goja
+// invariant break from two separate spread-reassigns.
+export function updatePresenceLocation(
+  state: WorldMatchState,
+  userId: string,
+  newPos: Position,
+): void {
+  const ps = state.presencesByUserId[userId];
+  if (!ps) return;
+  const oldChunk = chunkKeyOf(ps.position);
+  const newChunk = chunkKeyOf(newPos);
+  if (oldChunk !== newChunk) {
+    removePresenceFromChunk(state, userId, ps.position);
+    addPresenceToChunk(state, userId, newPos);
+  }
 }
 
 // Vrací Presence[] všech hráčů, kteří jsou ve fromChunk nebo v jeho 3×3 okolí

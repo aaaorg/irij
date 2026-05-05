@@ -17,8 +17,6 @@ import {
   USERNAME_REGEX,
 } from 'irij-shared/constants';
 import type {
-  CreateCharacterError,
-  CreateCharacterRequest,
   CreateCharacterResponse,
   GetSelfResponse,
 } from 'irij-shared/messages';
@@ -31,11 +29,25 @@ import type {
   SatchelEntry,
   SkillRow,
 } from 'irij-shared/types';
+import { int, obj, oneOf, parse, str } from 'irij-shared';
+import { asPlayer, asPlayerState } from 'irij-shared/types';
 import { logAudit } from '../lib/audit.js';
+import { RpcError } from '../lib/errors.js';
+import { log } from '../lib/log.js';
 
-// Storage je owner-readable, server-only writable. Klient čte přes RPC, ne přímo.
 const PERMISSION_OWNER_READ = 1;
 const PERMISSION_NO_WRITE = 0;
+
+const CreateCharacterSchema = obj({
+  username: str().min(3).max(16).pattern(USERNAME_REGEX),
+  display_name: str().min(DISPLAY_NAME_MIN).max(DISPLAY_NAME_MAX),
+  gender: oneOf('M' as const, 'F' as const),
+  appearance: obj({
+    hair_id: int().min(0).max(APPEARANCE_OPTIONS - 1),
+    skin_tone_id: int().min(0).max(APPEARANCE_OPTIONS - 1),
+    outfit_id: int().min(0).max(APPEARANCE_OPTIONS - 1),
+  }),
+});
 
 export function profileGetSelf(
   ctx: nkruntime.Context,
@@ -64,8 +76,13 @@ export function profileGetSelf(
     return JSON.stringify({ exists: false } satisfies GetSelfResponse);
   }
 
-  const player = playerObj.value as Player;
-  const playerState = stateObj.value as PlayerState;
+  const player = asPlayer(playerObj.value);
+  const playerState = asPlayerState(stateObj.value);
+  if (!player || !playerState) {
+    log(logger, 'warn', 'get_self: blob narrowing failed', { userId });
+    return JSON.stringify({ exists: false } satisfies GetSelfResponse);
+  }
+
   const skillsBlob = skillsObj.value as { atributy: AtributRow[]; skilly: SkillRow[] };
   const invBlob = invObj.value as {
     inventory: InventorySlot[];
@@ -73,7 +90,7 @@ export function profileGetSelf(
     equipment: EquipmentEntry[];
   };
 
-  logger.info(`get_self ok for ${userId}`);
+  log(logger, 'info', 'get_self ok', { userId });
 
   const response: GetSelfResponse = {
     exists: true,
@@ -96,17 +113,37 @@ export function profileCreateCharacter(
 ): string {
   const userId = ctx.userId;
   if (!userId) {
-    return errorResponse('invalid_username');
+    throw new RpcError('invalid_username', 'missing userId');
   }
 
-  const req = parseRequest(payload);
-  if (!req) {
-    return errorResponse('invalid_username');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    throw new RpcError('invalid_username', 'malformed JSON');
   }
 
-  const validationError = validate(req);
-  if (validationError) {
-    return errorResponse(validationError);
+  const result = parse(CreateCharacterSchema, parsed);
+  if (!result.ok) {
+    const firstError = result.errors[0] ?? '';
+    if (firstError.includes('username')) throw new RpcError('invalid_username', firstError);
+    if (firstError.includes('display_name')) throw new RpcError('invalid_display_name', firstError);
+    if (firstError.includes('gender')) throw new RpcError('invalid_gender', firstError);
+    if (firstError.includes('appearance') || firstError.includes('hair_id') || firstError.includes('skin_tone_id') || firstError.includes('outfit_id'))
+      throw new RpcError('invalid_appearance', firstError);
+    throw new RpcError('invalid_username', firstError);
+  }
+
+  const req = result.value;
+
+  // Display name: validate code-point length (emoji/CJK).
+  const trimmed = req.display_name.trim();
+  const cpLength = [...trimmed].length;
+  if (cpLength < DISPLAY_NAME_MIN || cpLength > DISPLAY_NAME_MAX) {
+    throw new RpcError('invalid_display_name', 'display_name code-point length out of range');
+  }
+  if (trimmed !== req.display_name) {
+    throw new RpcError('invalid_display_name', 'display_name has leading/trailing whitespace');
   }
 
   // Anti-double-create: pokud už player blob existuje, odmítni.
@@ -114,13 +151,12 @@ export function profileCreateCharacter(
     { collection: STORAGE_COLLECTIONS.PLAYER, key: userId, userId },
   ]);
   if (existing.length > 0) {
-    return errorResponse('already_exists');
+    throw new RpcError('already_exists', 'character already exists');
   }
 
-  // Username unikátnost přes Nakama account (account.username je unique index).
-  const usernameTaken = isUsernameTaken(nk, req.username, userId);
-  if (usernameTaken) {
-    return errorResponse('username_taken');
+  // Username unikátnost přes Nakama account.
+  if (isUsernameTaken(nk, req.username, userId)) {
+    throw new RpcError('username_taken', 'username already in use');
   }
 
   const now = new Date().toISOString();
@@ -135,7 +171,7 @@ export function profileCreateCharacter(
     created_at: now,
     last_login_at: now,
     total_xp: 0,
-    total_level: ATRIBUT_NAMES.length + SKILL_NAMES.length, // 21 × lvl 1
+    total_level: ATRIBUT_NAMES.length + SKILL_NAMES.length,
     tutorial_completed: false,
     settings: {},
   };
@@ -166,17 +202,13 @@ export function profileCreateCharacter(
     quantity: 0,
   }));
 
-  // Update Nakama account username; pokud někdo mezitím stejný username chytl,
-  // accountUpdateId throwne — chytneme jako username_taken.
   try {
     nk.accountUpdateId(userId, req.username, req.display_name, undefined, undefined, undefined, undefined, undefined);
   } catch (err) {
-    logger.warn(`accountUpdateId failed for ${userId}: ${String(err)}`);
-    return errorResponse('username_taken');
+    log(logger, 'warn', 'accountUpdateId failed', { userId, error: String(err) });
+    throw new RpcError('username_taken', 'accountUpdateId race');
   }
 
-  // Atomicky zapíšeme všechny tři bloby. Pokud zápis selže, accountUpdateId zůstane,
-  // ale `exists` check zabrání duplicitnímu vytvoření při retry.
   nk.storageWrite([
     {
       collection: STORAGE_COLLECTIONS.PLAYER,
@@ -212,7 +244,7 @@ export function profileCreateCharacter(
     },
   ]);
 
-  logger.info(`Character created for ${userId} (username=${req.username})`);
+  log(logger, 'info', 'character created', { userId, username: req.username });
 
   logAudit(nk, 'character_created', {
     userId,
@@ -224,47 +256,6 @@ export function profileCreateCharacter(
   return JSON.stringify(response);
 }
 
-function parseRequest(payload: string): CreateCharacterRequest | null {
-  try {
-    const parsed = JSON.parse(payload) as Partial<CreateCharacterRequest>;
-    if (
-      typeof parsed.username === 'string' &&
-      typeof parsed.display_name === 'string' &&
-      (parsed.gender === 'M' || parsed.gender === 'F') &&
-      parsed.appearance &&
-      typeof parsed.appearance === 'object'
-    ) {
-      return parsed as CreateCharacterRequest;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function validate(req: CreateCharacterRequest): CreateCharacterError | null {
-  if (!USERNAME_REGEX.test(req.username)) return 'invalid_username';
-
-  const trimmed = req.display_name.trim();
-  // [...str] iteruje code points, takže emoji/CJK počítáme správně.
-  const length = [...trimmed].length;
-  if (length < DISPLAY_NAME_MIN || length > DISPLAY_NAME_MAX) return 'invalid_display_name';
-  if (trimmed !== req.display_name) return 'invalid_display_name';
-
-  if (req.gender !== 'M' && req.gender !== 'F') return 'invalid_gender';
-
-  const a = req.appearance;
-  if (!isInRange(a.hair_id, 0, APPEARANCE_OPTIONS - 1)) return 'invalid_appearance';
-  if (!isInRange(a.skin_tone_id, 0, APPEARANCE_OPTIONS - 1)) return 'invalid_appearance';
-  if (!isInRange(a.outfit_id, 0, APPEARANCE_OPTIONS - 1)) return 'invalid_appearance';
-
-  return null;
-}
-
-function isInRange(n: unknown, min: number, max: number): boolean {
-  return typeof n === 'number' && Number.isInteger(n) && n >= min && n <= max;
-}
-
 function isUsernameTaken(nk: nkruntime.Nakama, username: string, currentUserId: string): boolean {
   try {
     const users = nk.usersGetUsername([username]);
@@ -272,9 +263,4 @@ function isUsernameTaken(nk: nkruntime.Nakama, username: string, currentUserId: 
   } catch {
     return false;
   }
-}
-
-function errorResponse(error: CreateCharacterError): string {
-  const response: CreateCharacterResponse = { ok: false, error };
-  return JSON.stringify(response);
 }
