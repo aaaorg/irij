@@ -653,14 +653,15 @@ export class WorldScene extends Phaser.Scene {
   private createHpBar(entityId: string, sprite: Phaser.GameObjects.Sprite, hpPct: number): void {
     const barW = 28;
     const barH = 4;
+    const barY = sprite.y - sprite.displayHeight - 4;
     const bg = this.add
-      .rectangle(sprite.x - barW / 2, sprite.y - sprite.height - 6, barW, barH, 0x440000)
+      .rectangle(sprite.x - barW / 2, barY, barW, barH, 0x440000)
       .setOrigin(0, 0)
-      .setDepth(depthForDynamic(sprite.y) + 1);
+      .setDepth(sprite.depth + 1);
     const fg = this.add
-      .rectangle(sprite.x - barW / 2, sprite.y - sprite.height - 6, barW * hpPct, barH, 0x00cc00)
+      .rectangle(sprite.x - barW / 2, barY, barW * hpPct, barH, 0x00cc00)
       .setOrigin(0, 0)
-      .setDepth(depthForDynamic(sprite.y) + 2);
+      .setDepth(sprite.depth + 2);
 
     this.hpBars.set(entityId, { bg, fg, hpPct });
   }
@@ -712,8 +713,9 @@ export class WorldScene extends Phaser.Scene {
         continue;
       }
       const barW = 28;
-      bar.bg.setPosition(sprite.x - barW / 2, sprite.y - sprite.height - 6);
-      bar.fg.setPosition(sprite.x - barW / 2, sprite.y - sprite.height - 6);
+      const barY = sprite.y - sprite.displayHeight - 4;
+      bar.bg.setPosition(sprite.x - barW / 2, barY);
+      bar.fg.setPosition(sprite.x - barW / 2, barY);
       bar.bg.setDepth(sprite.depth + 1);
       bar.fg.setDepth(sprite.depth + 2);
     }

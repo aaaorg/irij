@@ -430,6 +430,7 @@ Tyhle chuti tě budou pokoušet. Odolávej.
 - PvP arena — počkat (i když je v scope)
 - Fast travel — počkat
 - Cosmetics shop — počkat
+- **Client-side movement prediction + reconciliation** — post-MVP. Klient aktuálně čeká na server ENTITY_MOVED a pak interpoluje (RS3 model). Při změně směru za pohybu sprite "dohání" server pozici rychlejším pohybem (1-2 tile catch-up). Plná oprava: klient optimisticky predikuje A* path lokálně, posílá MOVE_REQUEST, server potvrdí/opraví → klient reconciluje. Vyžaduje sdílenou walkable masku na klientu + reconciliation logic. Aktuální stav je pro MVP akceptovatelný (RS3 má stejný efekt), ale pro polish (Phase 18+) zvážit.
 
 ---
 
