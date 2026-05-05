@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { TiledMap } from 'irij-shared/types';
 import {
   maskFromTiledMap,
   isInBounds,
@@ -12,13 +13,17 @@ function makeTiledMap(
   height: number,
   data: number[],
   layerName = 'terrain',
-) {
+): TiledMap {
   return {
+    orientation: 'isometric',
     width,
     height,
+    tilewidth: 64,
+    tileheight: 32,
     layers: [
       { name: layerName, type: 'tilelayer', width, height, data },
     ],
+    tilesets: [],
   };
 }
 
@@ -47,20 +52,21 @@ describe('maskFromTiledMap', () => {
 
   it('throws when terrain layer is missing', () => {
     expect(() =>
-      maskFromTiledMap({
-        width: 2,
-        height: 2,
-        layers: [
-          { name: 'objects', type: 'tilelayer', width: 2, height: 2, data: [1, 1, 1, 1] },
-        ],
-      }),
+      maskFromTiledMap(makeTiledMap(2, 2, [1, 1, 1, 1], 'objects')),
     ).toThrow(/terrain/);
   });
 
   it('handles empty layers array', () => {
-    expect(() =>
-      maskFromTiledMap({ width: 2, height: 2, layers: [] }),
-    ).toThrow(/terrain/);
+    const emptyMap: TiledMap = {
+      orientation: 'isometric',
+      width: 2,
+      height: 2,
+      tilewidth: 64,
+      tileheight: 32,
+      layers: [],
+      tilesets: [],
+    };
+    expect(() => maskFromTiledMap(emptyMap)).toThrow(/terrain/);
   });
 });
 

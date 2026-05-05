@@ -39,14 +39,32 @@ async function unwrapIife() {
   await writeFile(OUTFILE, unwrapped, 'utf8');
 }
 
+async function verifyInitModule() {
+  const src = await readFile(OUTFILE, 'utf8');
+  if (/var __irij_server\b/.test(src)) {
+    console.error(
+      'BUILD FAILED: IIFE wrapper still present in dist/index.js.\n' +
+        'unwrapIife() regex no longer matches esbuild output format.\n' +
+        'Nakama runtime will crash with "failed to find InitModule".',
+    );
+    process.exit(1);
+  }
+  if (!/function InitModule\b/.test(src)) {
+    console.error(
+      'BUILD FAILED: `function InitModule` not found in dist/index.js.\n' +
+        'Nakama runtime will crash with "failed to find InitModule".',
+    );
+    process.exit(1);
+  }
+}
+
 if (watch) {
   const ctx = await context(config);
   await ctx.watch();
   console.log('esbuild: watching…');
-  // Watch mode unwrap done once; rebuild stays wrapped without rebuilding.
-  // Pro jednoduchost watch mode není podporován pro Nakama loading; používej --build pro deploy.
 } else {
   await build(config);
   await unwrapIife();
+  await verifyInitModule();
   console.log('esbuild: built to dist/index.js');
 }

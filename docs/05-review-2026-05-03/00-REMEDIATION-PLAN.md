@@ -186,7 +186,7 @@
 
 ## Sekce C — Build pipeline & runtime robustness (před Phase 5)
 
-### C1 — Post-build IIFE strip guard (P0) ✅
+### C1 — Post-build IIFE strip guard (P0) ✅ PR #24
 
 - **Source:** Tech Lead, Nakama specialist.
 - **Why:** `server/build.js` regex unwrap je fragile. Esbuild minor upgrade tichounce rozbije, Nakama spadne s "failed to find InitModule".
@@ -200,7 +200,7 @@
 - **Verify:** uměle rozbij `unwrapIife()` (return raw), build → exit 1 s jasnou hláškou.
 - **Effort:** ~30 min.
 
-### C2 — `find_or_create_match` race fix (P0) ✅
+### C2 — `find_or_create_match` race fix (P0) ✅ PR #24
 
 - **Source:** Tech Lead, Nakama specialist.
 - **Why:** Race může vyrobit 2-3 orphan matche tickající 10 Hz. Komentář v `world.ts` to přiznává. Před prvním produkčním deploy řešit.
@@ -214,7 +214,7 @@
 - **Verify:** unit test (Vitest) s fake storage mockem simulujícím race; integration manuální (10 paralelních klientů).
 - **Effort:** ~3 h.
 
-### C3 — Replace `mapJson as any` typed import (P0) ✅
+### C3 — Replace `mapJson as any` typed import (P0) ✅ PR #24
 
 - **Source:** Tech Lead, Backend.
 - **Why:** Cast ruší TS jistotu právě tam, kde je nejvíc potřeba (walkable mask init z bundlnutého `.tmj`). Tiled export drift = silent runtime KO.
@@ -229,7 +229,7 @@
 - **Verify:** `pnpm build:server` bez errorů, ale `git diff` ukazuje že `as any` zmizel.
 - **Effort:** ~1 h.
 
-### C4 — Shared walkable typology (P1) ✅
+### C4 — Shared walkable typology (P1) ✅ PR #24
 
 - **Source:** Tech Lead.
 - **Why:** Server: `NON_WALKABLE_TILE_GIDS`. Klient: zatím bez vlastní walkable logiky (každý click letí na server). Phase 18 polish + objects layer → klient bude muset filtrovat lokálně, hrozí drift.
@@ -241,7 +241,7 @@
 - **Verify:** unit test (server walkable test už pokrývá; přidej shared test).
 - **Effort:** ~1 h.
 
-### C5 — `runScheduledTicks` table-driven counter helper (P1) ✅
+### C5 — `runScheduledTicks` table-driven counter helper (P1) ✅ PR #24
 
 - **Source:** Tech Lead.
 - **Why:** Phase 5 autosave + Phase 6 combat/AI ticky přijdou; bez jednotného pattern hrozí ad-hoc spaghetti v `matchLoop`.

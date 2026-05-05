@@ -20,24 +20,11 @@
 // jednoduchost + Goja-friendly. Per-chunk 64×64 = 4096 entries; 50×50 mapa
 // se vejde do jediného chunku (4096 entries, ~few KB v JS heap, triviální).
 
-import { CHUNK_SIZE_TILES, NON_WALKABLE_TILE_GIDS } from 'irij-shared/constants';
-import type { Position } from 'irij-shared/types';
+import { CHUNK_SIZE_TILES } from 'irij-shared/constants';
+import type { Position, TiledMap } from 'irij-shared/types';
+import { isWalkableGid } from 'irij-shared';
 
 const TERRAIN_LAYER_NAME = 'terrain';
-
-interface TiledTileLayer {
-  name: string;
-  type: string;
-  width: number;
-  height: number;
-  data: number[];
-}
-
-interface TiledMap {
-  width: number;
-  height: number;
-  layers: TiledTileLayer[];
-}
 
 export interface WalkableMask {
   width: number;
@@ -68,9 +55,7 @@ export function maskFromTiledMap(map: TiledMap): WalkableMask {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const gid = terrain.data[y * width + x] ?? 0;
-      // gid 0 = void (žádná dlaždice), non-walkable.
-      // gid v NON_WALKABLE_TILE_GIDS = explicitně non-walkable (voda atd.).
-      const walkable = gid !== 0 && !NON_WALKABLE_TILE_GIDS.has(gid);
+      const walkable = isWalkableGid(gid);
 
       const cx = Math.floor(x / CHUNK_SIZE_TILES);
       const cy = Math.floor(y / CHUNK_SIZE_TILES);
