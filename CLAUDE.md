@@ -56,7 +56,7 @@ Klient pouze _navrhuje_ akce a interpoluje/predikuje pro UX. Server validuje ka�
 
 Master tick = **10 Hz** (`TICK_HZ`). Vše ostatní jsou násobky pomocí counterů v `match_loop`:
 
-- `COMBAT_TICK_INTERVAL = 3` (~330 ms)
+- `COMBAT_TICK_INTERVAL = 6` (600 ms)
 - `AI_TICK_INTERVAL = 5` (500 ms)
 - `RESOURCE_RESPAWN_CHECK_INTERVAL = 150` (15 s)
 - `PLAYER_AUTOSAVE_INTERVAL = 300` (30 s)
