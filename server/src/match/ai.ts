@@ -206,7 +206,8 @@ function tickChase(
   }
   if (!needRepath) return;
 
-  const chaseTarget = findAdjacentToTarget(state, mob.position, target.position) ?? target.position;
+  const chaseTarget = findAdjacentToTarget(state, mob.position, target.position);
+  if (!chaseTarget) return; // no walkable cardinal tile found — wait for target to move
   const path = findPath(state.walkable, mob.position, chaseTarget, { maxPathLength: 16 });
   if (!path || path.length === 0) return;
 
@@ -272,11 +273,12 @@ function tickLeashReturn(
     return;
   }
 
-  // Re-aggro if a player entered aggro radius while mob is still within leash zone
+  // Re-aggro if a player entered aggro radius while mob has enough leash room
+  // to actually reach them (buffer of aggro_radius prevents edge-of-leash loop)
   const def = state.mobDefinitions[mob.mobId];
   if (def) {
     const distFromSpawn = chebyshevDistance(mob.position, mob.spawnPosition);
-    if (distFromSpawn <= mob.leashRadiusTiles) {
+    if (distFromSpawn + def.aggro_radius_tiles <= mob.leashRadiusTiles) {
       const nearest = findNearestPlayer(state, mob, def.aggro_radius_tiles);
       if (nearest) {
         state.mobInstances = {

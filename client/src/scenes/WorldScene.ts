@@ -389,13 +389,19 @@ export class WorldScene extends Phaser.Scene {
     speedTps: number,
   ): void {
     if (path.length === 0) return;
+
+    // Use current tracked tile position instead of server's `from` to prevent
+    // visual teleports caused by tick-based vs wall-clock timing divergence.
+    const tracked = this.entityTilePositions.get(entityId);
+    const effectiveFrom = tracked ? { x: tracked.x, y: tracked.y } : { x: from.x, y: from.y };
+
     this.entityMoveStates.set(entityId, {
-      from: { x: from.x, y: from.y },
+      from: effectiveFrom,
       path: path.map((p) => ({ x: p.x, y: p.y })),
       speedTps,
       startedAtMs: Date.now(),
     });
-    this.entityTilePositions.set(entityId, { x: from.x, y: from.y });
+    this.entityTilePositions.set(entityId, { x: effectiveFrom.x, y: effectiveFrom.y });
   }
 
   override update(_time: number, _delta: number): void {
