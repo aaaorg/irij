@@ -8,6 +8,7 @@ import type {
   Gender,
   InventorySlot,
   Player,
+  PlayerState,
   SatchelEntry,
   SkillRow,
 } from '../types/player.js';
@@ -40,6 +41,7 @@ export type GetSelfResponse =
   | {
       exists: true;
       player: Player;
+      player_state: PlayerState;
       atributy: AtributRow[];
       skilly: SkillRow[];
       inventory: InventorySlot[];

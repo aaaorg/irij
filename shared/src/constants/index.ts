@@ -67,6 +67,7 @@ export const HEARTBEAT_INTERVAL_MS = 15_000;
 // Storage collections (Nakama Storage Engine, klíč = userId) — viz docs/02a sekce Storage layer notes.
 export const STORAGE_COLLECTIONS = {
   PLAYER: 'player',
+  PLAYER_STATE: 'player_state',
   PLAYER_SKILLS: 'player_skills',
   PLAYER_INVENTORY: 'player_inventory',
 } as const;

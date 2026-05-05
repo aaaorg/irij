@@ -104,7 +104,9 @@
 
 | Data type                                       | Storage                  | Důvod                                          |
 | ----------------------------------------------- | ------------------------ | ---------------------------------------------- |
-| Player state (Player, Skills, Atributy, Inventory, Equipment, Status) | **Nakama Storage Engine** (JSON blobs) | Per-player ownership, write-through z match state, single key lookup |
+| Player profile (display info, appearance, settings) | **Nakama Storage Engine** (`player` collection) | Per-player, write-once + explicit RPC |
+| Player hot-path state (position, HP, mana, zone) | **Nakama Storage Engine** (`player_state` collection) | Autosave 30 s, minimální contention s profile |
+| Skills, Atributy, Inventory, Equipment          | **Nakama Storage Engine** (JSON blobs) | Per-player ownership, write-through z match state, single key lookup |
 | Bank                                            | **Nakama Storage**       | Per-player, lazy load, large blob OK           |
 | World data (mob spawns, resource nodes, NPC stocks, listings, job board tasks) | **Postgres tables (přímý přístup)** | Cross-player queries, indexované, time-based aggregace |
 | Audit log (forensika, anti-cheat events, worker logs) | **Postgres tables**      | Insert-only, queryable, retention policy       |
@@ -126,6 +128,25 @@
 - Schema migration: `golang-migrate` (Docker image `migrate/migrate:latest`) jako sidecar service v `infra/docker-compose.yml` — spouští se automaticky před Nakama startem, mount `./migrations:/migrations:ro`. Migrační soubory: `NNNN_popis.up.sql` + `NNNN_popis.down.sql` v `migrations/`.
 - Aktuální migrace: `0001_init_irij_schema` (CREATE SCHEMA irij), `0002_audit_log` (partitioned table `irij.audit_log` s indexy na event a user_id)
 - Backup strategy: `infra/scripts/backup.sh` (pg_dump custom format, 4×/den cron, 7-den retence) + `infra/scripts/restore-drill.sh` (měsíční drill). Viz [docs/06-ops-runbooks.md](06-ops-runbooks.md).
+
+### OCC pattern (Optimistic Concurrency Control)
+
+Nakama Storage Engine podporuje CAS (Compare-And-Swap) přes `version` field. Každý read vrací `version` string; write s `version` selže, pokud někdo mezitím objekt změnil (→ `storageRejectedVersion`).
+
+**Rule:** Každý write na player blob = read with version → mutate → write with version → on conflict re-read + re-apply (max 3 retries).
+
+**Proč:** Phase 5 autosave (30 s interval v match loop) běží souběžně s explicit RPC writes (inventory trade, skill gain). Bez OCC → lost-update race → duplikace itemů, ztráta XP.
+
+**Implementace:** `server/src/lib/storage.ts` — `readWithVersion<T>()`, `writeWithVersion()`, `withOCCRetry<T>(nk, collection, key, userId, mutatorFn, maxRetries)`. Retry helper chytá version conflict, re-reads a re-applies mutator.
+
+**Player blob split (B2):** Hot-path data (pozice, HP, mana, zone) žijí v separátní collection `player_state`, autosave píše jen tam. `player` blob (display_name, gender, appearance) je write-once + write-on-explicit-RPC → minimální contention. Oba bloby mají `schema_version: 1` pro future migration narrowing.
+
+| Collection          | Content                              | Write frequency      |
+| ------------------- | ------------------------------------ | -------------------- |
+| `player`            | Display info, appearance, settings   | Write-once + RPC     |
+| `player_state`      | Position, HP, mana, zone, logout_at  | Autosave 30 s        |
+| `player_skills`     | Atributy, skilly, sources            | On XP gain (RPC)     |
+| `player_inventory`  | Inventory, satchel, equipment        | On item change (RPC) |
 
 ---
 
@@ -726,3 +747,4 @@ Tyto se vyřeší při skutečném provisioningu, ne v designu:
 - **2026-05-03** — Draft 1.5: ADR-019 doplněn o **klient deterministic update-loop** (místo Phaser TweenChain). User-reported drift po alt-tab: Phaser tweens jedou přes `requestAnimationFrame`, browser ho v hidden tabu pause-uje, sprite po návratu do tabu pokračoval od starého stavu místo current server position. Fix: klient drží wall-clock baseline (`Date.now()`) a v scene `update()` každý frame deterministic-ky recomputuje sprite pozici z elapsed × speed_tps. Self-correcting bez Page Visibility API — tab return = první update spočítá correct pozici a sprite skočí/lerpne na ni.
 - **2026-05-03** — Draft 1.6: přidán ADR-020 (8-směrový pohyb, octile A*). User-reported zubatý pohyb v iso projekci — cesta po crossroads jela schodovitě N-E-N-E místo přímé NE-NE. Phase 4 pathfinding byl 4-směrový (Manhattan heuristika) bez technického důvodu krom „matchne iso aesthetic" — naopak iso projekce zve k diagonálům. ADR-020 přepíná na 8-směrový A* (cardinal + diagonal, octile cost √2 pro diagonal, no-corner-cutting), 8-směrové nearest-walkable BFS. Klient bez změny (lerp je směrově agnostický). ADR-018 sprite směry update na 8 (cíl), Phase 4c MVP stále 1-frame static. Code: [pathfinding.ts](../server/src/match/pathfinding.ts), [walkable.ts](../server/src/match/walkable.ts).
 - **2026-05-04** — Draft 1.7 (Phase 4.5 operational hardening): ADR-004 doplněn o `irij` schema, golang-migrate Docker sidecar, aktuální migrace (0001+0002), backup skripty + runbook reference. ADR-012 doplněn o implementační detail audit logu (`irij.audit_log` partitioned table, `logAudit` helper, callsite character_created + move_rejected). ADR-017 status Proposed → Accepted, doplněn Vitest (47 testů), Playwright smoke, GitHub Actions CI.
+- **2026-05-04** — Draft 1.8 (remediation B1+B2): ADR-004 doplněn o OCC pattern subsection (readWithVersion/writeWithVersion/withOCCRetry) a player blob split tabulku. `player_state` collection pro hot-path autosave, `player` blob write-once + explicit RPC. Oba bloby `schema_version: 1`.
