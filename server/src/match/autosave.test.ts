@@ -34,6 +34,14 @@ function makeState(presences: Record<string, PlayerPresenceState>): WorldMatchSt
     presencesByUserId: presences,
     presencesByChunk: {},
     moveRequestLog: {},
+    attackRequestLog: {},
+    mobDefinitions: {},
+    lootTables: {},
+    mobInstances: {},
+    mobsByChunk: {},
+    dropInstances: {},
+    dropsByChunk: {},
+    combatEngagements: {},
   };
 }
 

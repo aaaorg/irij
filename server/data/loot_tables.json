@@ -1,0 +1,17 @@
+[
+  {
+    "id": "loot.wolf",
+    "rolls": [
+      { "item_id": "material.hide.wolf", "quantity": [1, 2], "chance_pct": 100 },
+      { "item_id": "material.bone", "quantity": [1, 1], "chance_pct": 100 },
+      { "item_id": "consumable.food.raw_meat", "quantity": [1, 1], "chance_pct": 30 }
+    ]
+  },
+  {
+    "id": "loot.giant_rat",
+    "rolls": [
+      { "item_id": "material.hide.rat", "quantity": [1, 1], "chance_pct": 100 },
+      { "item_id": "consumable.food.raw_meat", "quantity": [1, 1], "chance_pct": 20 }
+    ]
+  }
+]
