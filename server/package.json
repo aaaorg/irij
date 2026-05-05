@@ -13,7 +13,7 @@
     "irij-shared": "workspace:*"
   },
   "devDependencies": {
-    "esbuild": "^0.28.0",
+    "esbuild": "0.28.0",
     "nakama-runtime": "github:heroiclabs/nakama-common#v1.45.0",
     "typescript": "^5.9.0",
     "vitest": "^4.1.5"

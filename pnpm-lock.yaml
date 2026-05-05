@@ -53,7 +53,7 @@ importers:
         version: link:../shared
     devDependencies:
       esbuild:
-        specifier: ^0.28.0
+        specifier: 0.28.0
         version: 0.28.0
       nakama-runtime:
         specifier: github:heroiclabs/nakama-common#v1.45.0

@@ -41,7 +41,9 @@ import {
   computeCurrentPosition,
   handleMoveRequest,
 } from './movement.js';
+import { runScheduledTicks, type TickHandler } from './scheduler.js';
 import { countWalkable, maskFromTiledMap } from './walkable.js';
+import { clearWorldSingleton } from '../rpc/world.js';
 
 export function matchInit(
   _ctx: nkruntime.Context,
@@ -49,7 +51,7 @@ export function matchInit(
   _nk: nkruntime.Nakama,
   _params: { [key: string]: any },
 ): { state: WorldMatchState; tickRate: number; label: string } {
-  const walkable = maskFromTiledMap(mapJson as any);
+  const walkable = maskFromTiledMap(mapJson);
   const total = walkable.width * walkable.height;
   const w = countWalkable(walkable);
   logger.info(
@@ -61,6 +63,7 @@ export function matchInit(
     presencesByUserId: {},
     presencesByChunk: {},
     moveRequestLog: {},
+    tickCounters: {},
   };
   return {
     state,
@@ -294,12 +297,15 @@ export function matchLoop(
     // Ostatní opcodes ignoruje 4b — server logger.debug by zaplevelilo log.
   }
 
-  // 2) Advance server-side position state (chunk index, ps.position) podle
-  //    aktivních paths. ENTITY_MOVED se v tomto loopu NEbroadcastuje — per
-  //    ADR-019 to dělá handleMoveRequest jednou s celou path; klient lokálně
-  //    lerpuje. Combat tick (Phase 6), AI tick (Phase 6), autosave (Phase 5)
-  //    přijdou jako counters proti master 10 Hz tick.
+  // 2) Advance server-side position state (chunk index, ps.position).
   advanceMovement(state, dispatcher, tick);
+
+  // 3) Table-driven sub-system ticks (Phase 5: autosave, Phase 6: combat/AI).
+  const tickTable: Record<string, TickHandler> = {
+    // Phase 5: autosave entry bude přidána zde.
+    // Phase 6: combat, ai entries budou přidány zde.
+  };
+  state.tickCounters = runScheduledTicks(state.tickCounters, tickTable);
 
   return { state };
 }
@@ -307,7 +313,7 @@ export function matchLoop(
 export function matchTerminate(
   _ctx: nkruntime.Context,
   logger: nkruntime.Logger,
-  _nk: nkruntime.Nakama,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   _tick: number,
   state: WorldMatchState,
@@ -316,9 +322,6 @@ export function matchTerminate(
   const userIds = Object.keys(state.presencesByUserId);
   logger.info(`Match terminating; ${userIds.length} presences in state — broadcasting despawns`);
 
-  // Phase 5 doplní autosave Player blobu do Storage před despawnem (current_position,
-  // last_logout_at, atd.). Pro 4b jen oznámíme klientům despawn, aby si vyčistili
-  // sprite cache místo "duch" zůstávajícího v okolí.
   for (const userId of userIds) {
     const ps = state.presencesByUserId[userId];
     if (!ps) continue;
@@ -332,6 +335,9 @@ export function matchTerminate(
       userId,
     );
   }
+
+  clearWorldSingleton(nk, logger);
+
   return { state };
 }
 

@@ -3,17 +3,7 @@
 // bundle přes esbuild { loader: { '.tmj': 'json' } }, viz build.js.
 
 declare module '*.tmj' {
-  const value: {
-    width: number;
-    height: number;
-    layers: Array<{
-      name: string;
-      type: string;
-      width: number;
-      height: number;
-      data: number[];
-    }>;
-    [key: string]: unknown;
-  };
+  import type { TiledMap } from 'irij-shared/types';
+  const value: TiledMap;
   export default value;
 }
