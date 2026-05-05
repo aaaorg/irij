@@ -12,6 +12,32 @@ export interface ChunkId {
   cy: number;
 }
 
+// Tiled JSON export (.tmj) — minimální typ pokrývající pole, která server
+// a klient potřebují (walkable mask, orientation check). Plný Tiled schema
+// má desítky dalších polí; přidávej sem jen to, co effectivně čteš.
+export interface TiledTileLayer {
+  name: string;
+  type: string;
+  width: number;
+  height: number;
+  data: number[];
+}
+
+export interface TiledTilesetRef {
+  firstgid: number;
+  source: string;
+}
+
+export interface TiledMap {
+  orientation: string;
+  width: number;
+  height: number;
+  tilewidth: number;
+  tileheight: number;
+  layers: TiledTileLayer[];
+  tilesets: TiledTilesetRef[];
+}
+
 export function chunkOf(pos: Position): ChunkId {
   return {
     cx: Math.floor(pos.x / CHUNK_SIZE_TILES),

@@ -52,7 +52,6 @@ export interface WorldMatchState {
   // 4b: per-userId timestampy posledních N MOVE_REQUESTů (ms epoch). Sliding window
   // pro rate limit 10/s. Trim probíhá při každém checku v handleMoveRequest.
   moveRequestLog: { [userId: string]: number[] };
-  // TODO Phase 6: mobSpawns: { [spawnId]: MobInstanceState }
 }
 
 export function chunkKeyOf(pos: Position): string {

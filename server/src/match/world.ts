@@ -50,7 +50,7 @@ export function matchInit(
   _nk: nkruntime.Nakama,
   _params: { [key: string]: any },
 ): { state: WorldMatchState; tickRate: number; label: string } {
-  const walkable = maskFromTiledMap(mapJson as any);
+  const walkable = maskFromTiledMap(mapJson);
   const total = walkable.width * walkable.height;
   const w = countWalkable(walkable);
   log(logger, 'info', 'World match init', {
@@ -329,6 +329,7 @@ export function matchTerminate(
       userId,
     );
   }
+
   return { state };
 }
 
