@@ -116,6 +116,24 @@ export function movePresenceBetweenChunks(
   addPresenceToChunk(state, userId, newPos);
 }
 
+// D5: Transactionally-safe presence location update. Reassigns both
+// presencesByUserId and presencesByChunk in a single pass — avoids Goja
+// invariant break from two separate spread-reassigns.
+export function updatePresenceLocation(
+  state: WorldMatchState,
+  userId: string,
+  newPos: Position,
+): void {
+  const ps = state.presencesByUserId[userId];
+  if (!ps) return;
+  const oldChunk = chunkKeyOf(ps.position);
+  const newChunk = chunkKeyOf(newPos);
+  if (oldChunk !== newChunk) {
+    removePresenceFromChunk(state, userId, ps.position);
+    addPresenceToChunk(state, userId, newPos);
+  }
+}
+
 // Vrací Presence[] všech hráčů, kteří jsou ve fromChunk nebo v jeho 3×3 okolí
 // (Chebyshev ≤ radius). Žádný globální scan — iterujeme jen presencesByChunk
 // keys, což je O(active chunks), ne O(total players).

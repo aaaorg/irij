@@ -2,6 +2,7 @@
 // Handlery jsou pojmenované exportované funkce; registrují se inline v main.ts InitModule.
 
 import type { FindOrCreateMatchResponse } from 'irij-shared/messages';
+import { log } from '../lib/log.js';
 
 const MATCH_MODULE = 'world';
 const MATCH_LABEL = 'world.main';
@@ -34,19 +35,20 @@ export function worldFindOrCreateMatch(
   try {
     matches = nk.matchList(10, true, MATCH_LABEL, 0, 1000);
   } catch (err) {
-    logger.error(`matchList failed: ${String(err)}`);
+    log(logger, 'error', 'matchList failed', { error: String(err) });
     return JSON.stringify({ ok: false, error: 'match_list_failed' } satisfies FindOrCreateMatchResponse);
   }
 
   if (matches.length > 1) {
-    logger.warn(
-      `find_or_create_match: ${matches.length} matches with label=${MATCH_LABEL} — race or orphan, picking first`,
-    );
+    log(logger, 'warn', 'find_or_create_match: multiple matches, picking first', {
+      count: matches.length,
+      label: MATCH_LABEL,
+    });
   }
 
   if (matches.length > 0 && matches[0]) {
     const matchId = matches[0].matchId;
-    logger.debug(`find_or_create_match: reusing existing ${matchId} for ${userId}`);
+    log(logger, 'debug', 'find_or_create_match: reusing existing', { matchId, userId });
     return JSON.stringify({ ok: true, match_id: matchId } satisfies FindOrCreateMatchResponse);
   }
 
@@ -54,10 +56,10 @@ export function worldFindOrCreateMatch(
   try {
     matchId = nk.matchCreate(MATCH_MODULE, {});
   } catch (err) {
-    logger.error(`matchCreate failed: ${String(err)}`);
+    log(logger, 'error', 'matchCreate failed', { error: String(err) });
     return JSON.stringify({ ok: false, error: 'match_create_failed' } satisfies FindOrCreateMatchResponse);
   }
 
-  logger.info(`find_or_create_match: created ${matchId} for ${userId}`);
+  log(logger, 'info', 'find_or_create_match: created', { matchId, userId });
   return JSON.stringify({ ok: true, match_id: matchId } satisfies FindOrCreateMatchResponse);
 }
