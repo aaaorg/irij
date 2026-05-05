@@ -252,7 +252,7 @@ function resolveMobAttacks(
     };
 
     if (newHp <= 0) {
-      handlePlayerDeath(state, logger, dispatcher, mob.targetUserId);
+      handlePlayerDeath(state, logger, dispatcher, mob.targetUserId, instanceId);
     }
   }
 }
@@ -353,29 +353,57 @@ function handlePlayerDeath(
   logger: nkruntime.Logger,
   dispatcher: nkruntime.MatchDispatcher,
   userId: string,
+  killerEntityId: string,
 ): void {
   const ps = state.presencesByUserId[userId];
   if (!ps) return;
 
-  log(logger, 'info', 'player died', { userId: userId.slice(0, 8) });
+  log(logger, 'info', 'player died', {
+    userId: userId.slice(0, 8),
+    killedBy: killerEntityId,
+  });
+
+  const oldChunk = chunkKeyOf(ps.position);
+
+  const diedPayload: EntityDied = {
+    entity_id: userId,
+    killer_id: killerEntityId,
+    drops: null,
+    xp_awarded: [],
+  };
+  broadcastToChunkArea(dispatcher, state, oldChunk, Op.ENTITY_DIED, diedPayload);
+
+  const spawnPos: Position = { ...DEFAULT_SPAWN_POSITION };
+  updatePresenceLocation(state, userId, spawnPos);
 
   state.presencesByUserId = {
     ...state.presencesByUserId,
     [userId]: {
       ...ps,
+      position: spawnPos,
       hpCurrent: ps.hpMax,
       path: [],
       pathStartedAt: 0,
       pathConsumed: 0,
+      lastChunk: chunkKeyOf(spawnPos),
     },
   };
 
-  for (const instanceId of Object.keys(state.mobInstances)) {
-    const mob = state.mobInstances[instanceId];
+  const spawnPayload: EntitySpawned = {
+    entity_id: userId,
+    type: 'player',
+    position: spawnPos,
+    display_name: ps.displayName,
+    hp_pct: 1,
+  };
+  broadcastToChunkArea(dispatcher, state, chunkKeyOf(spawnPos), Op.ENTITY_SPAWNED, spawnPayload);
+
+  for (const iid of Object.keys(state.mobInstances)) {
+    const mob = state.mobInstances[iid];
     if (mob && mob.targetUserId === userId) {
       state.mobInstances = {
         ...state.mobInstances,
-        [instanceId]: { ...mob, aiState: 'idle' as const, targetUserId: null },
+        [iid]: { ...mob, aiState: 'idle' as const, targetUserId: null },
       };
     }
   }

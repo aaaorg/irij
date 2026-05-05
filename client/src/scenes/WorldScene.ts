@@ -12,6 +12,7 @@ import type {
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
 import type { Position } from 'irij-shared/types';
+import { DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, screenToTile, worldToScreen } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -369,6 +370,11 @@ export class WorldScene extends Phaser.Scene {
   private handleEntityDied(payload: EntityDied): void {
     if (!payload?.entity_id) return;
 
+    if (payload.entity_id === this.selfUserId) {
+      this.handleSelfDeath();
+      return;
+    }
+
     const mobSprite = this.mobSprites.get(payload.entity_id);
     if (mobSprite) {
       this.entityMoveStates.delete(payload.entity_id);
@@ -386,12 +392,41 @@ export class WorldScene extends Phaser.Scene {
       });
     }
 
+    const playerSprite = this.otherPlayers.get(payload.entity_id);
+    if (playerSprite) {
+      this.entityMoveStates.delete(payload.entity_id);
+      this.removeHpBar(payload.entity_id);
+      this.entityTilePositions.delete(payload.entity_id);
+      this.tweens.killTweensOf(playerSprite);
+      playerSprite.destroy();
+      this.otherPlayers.delete(payload.entity_id);
+    }
+
     if (payload.killer_id === this.selfUserId && payload.xp_awarded.length > 0) {
       const xpText = payload.xp_awarded
         .map((a) => `+${a.amount} ${a.skill}`)
         .join(', ');
       this.showToast(`XP: ${xpText}`, '#44ff44');
     }
+  }
+
+  private handleSelfDeath(): void {
+    this.entityMoveStates.delete(this.selfUserId!);
+    this.pendingAttackTarget = null;
+    this.removeHpBar('self');
+
+    const spawnPos = DEFAULT_SPAWN_POSITION;
+    this.selfTilePosition = { x: spawnPos.x, y: spawnPos.y };
+    this.entityTilePositions.set(this.selfUserId!, { x: spawnPos.x, y: spawnPos.y });
+
+    if (this.player) {
+      const px = this.tileCenterPx(spawnPos);
+      this.player.setPosition(px.x, px.y);
+      this.player.setDepth(depthForDynamic(spawnPos.y));
+      this.player.setData('hpCurrent', this.player.getData('hpMax') as number ?? 10);
+    }
+
+    this.showToast('Zemřel jsi!', '#ff4444');
   }
 
   private handleMoveRejected(payload: MoveRejected): void {
