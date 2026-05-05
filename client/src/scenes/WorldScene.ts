@@ -66,6 +66,8 @@ export class WorldScene extends Phaser.Scene {
   private clientSeq = 0;
   private rejectToast?: Phaser.GameObjects.Text;
   private pendingAttackTarget: string | null = null;
+  private lastAttackRequestSentAt = 0;
+  private lastApproachSentAt = 0;
   private selfTilePosition: Position = { x: 25, y: 25 };
 
   constructor() {
@@ -569,10 +571,11 @@ export class WorldScene extends Phaser.Scene {
 
     const manhattanDist =
       Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y);
+    const now = this.time.now;
 
     if (manhattanDist === 1) {
-      // In range (cardinal adjacent) — attack
-      this.pendingAttackTarget = null;
+      if (now - this.lastAttackRequestSentAt < 550) return;
+      this.lastAttackRequestSentAt = now;
       this.clientSeq += 1;
       const payload = JSON.stringify({
         target_id: targetId,
@@ -583,20 +586,53 @@ export class WorldScene extends Phaser.Scene {
         .catch((err) => {
           console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
         });
-    } else if (!this.selfUserId || !this.entityMoveStates.has(this.selfUserId)) {
-      // Not moving and not in range — re-approach
-      const approachTile = this.findBestAdjacentTile(mobPos);
-      this.clientSeq += 1;
-      const payload = JSON.stringify({
-        target: approachTile,
-        client_seq: this.clientSeq,
-      });
-      this.connRef.socket
-        .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
-        .catch((err) => {
-          console.warn(`sendMatchState MOVE_REQUEST (re-approach) failed`, err);
-        });
+      return;
     }
+
+    // If mob is already pathing toward us, stand still and let it come
+    if (this.isMobApproachingUs(targetId)) return;
+
+    if (now - this.lastApproachSentAt < 500) return;
+
+    if (this.selfUserId && this.entityMoveStates.has(this.selfUserId)) {
+      const moveState = this.entityMoveStates.get(this.selfUserId);
+      if (moveState && moveState.path.length > 0) {
+        const pathEnd = moveState.path[moveState.path.length - 1]!;
+        const endToMob =
+          Math.abs(pathEnd.x - mobPos.x) + Math.abs(pathEnd.y - mobPos.y);
+        if (endToMob > 1) {
+          this.sendApproachRequest(mobPos, now);
+        }
+      }
+    } else {
+      this.sendApproachRequest(mobPos, now);
+    }
+  }
+
+  private isMobApproachingUs(mobId: string): boolean {
+    const mobMoveState = this.entityMoveStates.get(mobId);
+    if (!mobMoveState || mobMoveState.path.length === 0) return false;
+    const mobPathEnd = mobMoveState.path[mobMoveState.path.length - 1]!;
+    const endToPlayer =
+      Math.abs(mobPathEnd.x - this.selfTilePosition.x) +
+      Math.abs(mobPathEnd.y - this.selfTilePosition.y);
+    return endToPlayer <= 1;
+  }
+
+  private sendApproachRequest(mobPos: Position, now: number): void {
+    if (!this.connRef || !this.matchId) return;
+    this.lastApproachSentAt = now;
+    const approachTile = this.findBestAdjacentTile(mobPos);
+    this.clientSeq += 1;
+    const payload = JSON.stringify({
+      target: approachTile,
+      client_seq: this.clientSeq,
+    });
+    this.connRef.socket
+      .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+      .catch((err) => {
+        console.warn(`sendMatchState MOVE_REQUEST (re-approach) failed`, err);
+      });
   }
 
   private getSpriteForEntity(entityId: string): Phaser.GameObjects.Sprite | undefined {
@@ -812,8 +848,9 @@ export class WorldScene extends Phaser.Scene {
         : Infinity;
 
       if (manhattanDist === 1) {
-        // In range (adjacent) — attack immediately
-        this.pendingAttackTarget = null;
+        // In range (adjacent) — attack immediately, keep target for continuous combat
+        this.pendingAttackTarget = targetMobId;
+        this.lastAttackRequestSentAt = this.time.now;
         this.clientSeq += 1;
         const payload = JSON.stringify({
           target_id: targetMobId,
@@ -825,19 +862,22 @@ export class WorldScene extends Phaser.Scene {
             console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
           });
       } else if (mobPos) {
-        // Out of range — auto-approach: walk to adjacent tile, then attack
+        // Out of range — set target; approach only if mob isn't already coming to us
         this.pendingAttackTarget = targetMobId;
-        const approachTile = this.findBestAdjacentTile(mobPos);
-        this.clientSeq += 1;
-        const payload = JSON.stringify({
-          target: approachTile,
-          client_seq: this.clientSeq,
-        });
-        this.connRef.socket
-          .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
-          .catch((err) => {
-            console.warn(`sendMatchState MOVE_REQUEST (approach) failed`, err);
+        if (!this.isMobApproachingUs(targetMobId)) {
+          this.lastApproachSentAt = this.time.now;
+          const approachTile = this.findBestAdjacentTile(mobPos);
+          this.clientSeq += 1;
+          const payload = JSON.stringify({
+            target: approachTile,
+            client_seq: this.clientSeq,
           });
+          this.connRef.socket
+            .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+            .catch((err) => {
+              console.warn(`sendMatchState MOVE_REQUEST (approach) failed`, err);
+            });
+        }
       }
       return;
     }
