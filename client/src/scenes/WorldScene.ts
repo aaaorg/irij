@@ -390,10 +390,36 @@ export class WorldScene extends Phaser.Scene {
   ): void {
     if (path.length === 0) return;
 
-    // Use current tracked tile position instead of server's `from` to prevent
-    // visual teleports caused by tick-based vs wall-clock timing divergence.
-    const tracked = this.entityTilePositions.get(entityId);
-    const effectiveFrom = tracked ? { x: tracked.x, y: tracked.y } : { x: from.x, y: from.y };
+    // If entity is mid-interpolation, snap to the tile it's currently heading
+    // toward and start new path from there. Prevents visual teleport back to
+    // server's `from` which may differ due to tick vs wall-clock timing.
+    const existing = this.entityMoveStates.get(entityId);
+    let effectiveFrom = { x: from.x, y: from.y };
+
+    if (existing) {
+      const now = Date.now();
+      const elapsedMs = now - existing.startedAtMs;
+      const tilesElapsed = (elapsedMs * existing.speedTps) / 1000;
+      const idx = Math.floor(Math.max(0, tilesElapsed));
+
+      if (idx < existing.path.length) {
+        // Mid-path: snap to current target tile
+        const currentTarget = existing.path[idx];
+        if (currentTarget) {
+          effectiveFrom = { x: currentTarget.x, y: currentTarget.y };
+          const sprite = this.getSpriteForEntity(entityId);
+          if (sprite) {
+            const px = this.tileCenterPx(currentTarget);
+            sprite.setPosition(px.x, px.y);
+            sprite.setDepth(depthForDynamic(currentTarget.y));
+          }
+        }
+      } else {
+        // Path finished: use last path tile
+        const last = existing.path[existing.path.length - 1];
+        if (last) effectiveFrom = { x: last.x, y: last.y };
+      }
+    }
 
     this.entityMoveStates.set(entityId, {
       from: effectiveFrom,
@@ -402,6 +428,9 @@ export class WorldScene extends Phaser.Scene {
       startedAtMs: Date.now(),
     });
     this.entityTilePositions.set(entityId, { x: effectiveFrom.x, y: effectiveFrom.y });
+    if (entityId === this.selfUserId) {
+      this.selfTilePosition = { x: effectiveFrom.x, y: effectiveFrom.y };
+    }
   }
 
   override update(_time: number, _delta: number): void {
