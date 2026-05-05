@@ -403,7 +403,14 @@ function handlePlayerDeath(
     if (mob && mob.targetUserId === userId) {
       state.mobInstances = {
         ...state.mobInstances,
-        [iid]: { ...mob, aiState: 'idle' as const, targetUserId: null },
+        [iid]: {
+          ...mob,
+          aiState: 'leash_return' as const,
+          targetUserId: null,
+          path: [],
+          pathStartedAt: 0,
+          pathConsumed: 0,
+        },
       };
     }
   }
