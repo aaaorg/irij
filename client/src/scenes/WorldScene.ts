@@ -653,24 +653,26 @@ export class WorldScene extends Phaser.Scene {
   private createHpBar(entityId: string, sprite: Phaser.GameObjects.Sprite, hpPct: number): void {
     const barW = 28;
     const barH = 4;
+    const clamped = Math.max(0, Math.min(1, hpPct));
     const barY = sprite.y - sprite.displayHeight - 4;
     const bg = this.add
       .rectangle(sprite.x - barW / 2, barY, barW, barH, 0x440000)
       .setOrigin(0, 0)
       .setDepth(sprite.depth + 1);
     const fg = this.add
-      .rectangle(sprite.x - barW / 2, barY, barW * hpPct, barH, 0x00cc00)
+      .rectangle(sprite.x - barW / 2, barY, barW * clamped, barH, 0x00cc00)
       .setOrigin(0, 0)
       .setDepth(sprite.depth + 2);
 
-    this.hpBars.set(entityId, { bg, fg, hpPct });
+    this.hpBars.set(entityId, { bg, fg, hpPct: clamped });
   }
 
   private updateHpBar(entityId: string, hpPct: number): void {
+    const clamped = Math.max(0, Math.min(1, hpPct));
     const existing = this.hpBars.get(entityId);
     if (existing) {
-      existing.hpPct = hpPct;
-      existing.fg.width = 28 * Math.max(0, hpPct);
+      existing.hpPct = clamped;
+      existing.fg.width = 28 * clamped;
       if (hpPct < 0.3) {
         existing.fg.fillColor = 0xcc0000;
       } else if (hpPct < 0.6) {
