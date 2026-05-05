@@ -63,6 +63,8 @@ export class WorldScene extends Phaser.Scene {
   private entityTilePositions: Map<string, Position> = new Map();
   private clientSeq = 0;
   private rejectToast?: Phaser.GameObjects.Text;
+  private pendingAttackTarget: string | null = null;
+  private selfTilePosition: Position = { x: 25, y: 25 };
 
   constructor() {
     super('WorldScene');
@@ -407,6 +409,9 @@ export class WorldScene extends Phaser.Scene {
           sprite.setPosition(px.x, px.y);
           sprite.setDepth(depthForDynamic(last.y));
           this.entityTilePositions.set(entityId, { x: last.x, y: last.y });
+          if (entityId === this.selfUserId) {
+            this.selfTilePosition = { x: last.x, y: last.y };
+          }
         }
         completed.push(entityId);
         continue;
@@ -430,13 +435,53 @@ export class WorldScene extends Phaser.Scene {
       sprite.setPosition(x, y);
       sprite.setDepth(depthForDynamic(lerpedY));
       this.entityTilePositions.set(entityId, { x: endTile.x, y: endTile.y });
+      if (entityId === this.selfUserId) {
+        this.selfTilePosition = { x: endTile.x, y: endTile.y };
+      }
     }
 
     for (const id of completed) {
       this.entityMoveStates.delete(id);
+      if (id === this.selfUserId) {
+        this.checkPendingAttack();
+      }
     }
 
     this.updateAllHpBarPositions();
+
+    if (this.pendingAttackTarget) {
+      this.checkPendingAttack();
+    }
+  }
+
+  private checkPendingAttack(): void {
+    if (!this.pendingAttackTarget || !this.connRef || !this.matchId) return;
+
+    const targetId = this.pendingAttackTarget;
+    const mobPos = this.entityTilePositions.get(targetId);
+    if (!mobPos) {
+      this.pendingAttackTarget = null;
+      return;
+    }
+
+    const dist = Math.max(
+      Math.abs(this.selfTilePosition.x - mobPos.x),
+      Math.abs(this.selfTilePosition.y - mobPos.y),
+    );
+
+    if (dist <= 1) {
+      this.pendingAttackTarget = null;
+      this.clientSeq += 1;
+      const payload = JSON.stringify({
+        target_id: targetId,
+        client_seq: this.clientSeq,
+      });
+      this.connRef.socket
+        .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
+        .catch((err) => {
+          console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
+        });
+    }
   }
 
   private getSpriteForEntity(entityId: string): Phaser.GameObjects.Sprite | undefined {
@@ -639,23 +684,50 @@ export class WorldScene extends Phaser.Scene {
     const tile = screenToTile(pointer.worldX, pointer.worldY);
     if (!Number.isFinite(tile.x) || !Number.isFinite(tile.y)) return;
 
-    // Check if clicking on a mob tile
+    // Check if clicking on or near a mob
     const targetMobId = this.findMobAtTile(tile.x, tile.y);
     if (targetMobId) {
-      this.clientSeq += 1;
-      const payload = JSON.stringify({
-        target_id: targetMobId,
-        client_seq: this.clientSeq,
-      });
-      this.connRef.socket
-        .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
-        .catch((err) => {
-          console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
+      const mobPos = this.entityTilePositions.get(targetMobId);
+      const dist = mobPos
+        ? Math.max(
+            Math.abs(this.selfTilePosition.x - mobPos.x),
+            Math.abs(this.selfTilePosition.y - mobPos.y),
+          )
+        : Infinity;
+
+      if (dist <= 1) {
+        // In range — attack immediately
+        this.pendingAttackTarget = null;
+        this.clientSeq += 1;
+        const payload = JSON.stringify({
+          target_id: targetMobId,
+          client_seq: this.clientSeq,
         });
+        this.connRef.socket
+          .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
+          .catch((err) => {
+            console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
+          });
+      } else if (mobPos) {
+        // Out of range — auto-approach: walk to adjacent tile, then attack
+        this.pendingAttackTarget = targetMobId;
+        const approachTile = this.findBestAdjacentTile(mobPos);
+        this.clientSeq += 1;
+        const payload = JSON.stringify({
+          target: approachTile,
+          client_seq: this.clientSeq,
+        });
+        this.connRef.socket
+          .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+          .catch((err) => {
+            console.warn(`sendMatchState MOVE_REQUEST (approach) failed`, err);
+          });
+      }
       return;
     }
 
-    // Default: move request
+    // Default: move request (cancel pending attack)
+    this.pendingAttackTarget = null;
     this.clientSeq += 1;
     const matchId = this.matchId;
     const conn = this.connRef;
@@ -668,6 +740,28 @@ export class WorldScene extends Phaser.Scene {
     conn.socket.sendMatchState(matchId, Op.MOVE_REQUEST, payload).catch((err) => {
       console.warn(`sendMatchState MOVE_REQUEST seq=${seq} failed`, err);
     });
+  }
+
+  private findBestAdjacentTile(mobPos: Position): Position {
+    const offsets = [
+      { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 },
+      { x: -1, y: -1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: 1, y: 1 },
+    ];
+    let best = { x: mobPos.x, y: mobPos.y - 1 };
+    let bestDist = Infinity;
+    for (const off of offsets) {
+      const tx = mobPos.x + off.x;
+      const ty = mobPos.y + off.y;
+      const dist = Math.max(
+        Math.abs(this.selfTilePosition.x - tx),
+        Math.abs(this.selfTilePosition.y - ty),
+      );
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = { x: tx, y: ty };
+      }
+    }
+    return best;
   }
 
   private findMobAtTile(tileX: number, tileY: number): string | null {
@@ -744,6 +838,7 @@ export class WorldScene extends Phaser.Scene {
       .setOrigin(0.5, 1)
       .setDepth(depthForDynamic(y));
     this.player.setData('hpMax', profile.player_state.hp_max ?? 10);
+    this.selfTilePosition = { x, y };
 
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
   }
@@ -793,6 +888,7 @@ export class WorldScene extends Phaser.Scene {
     this.player = undefined;
     this.selfUserId = undefined;
     this.clientSeq = 0;
+    this.pendingAttackTarget = null;
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;

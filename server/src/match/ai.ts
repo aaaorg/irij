@@ -6,6 +6,7 @@ import type { Position } from 'irij-shared/types';
 import { log } from '../lib/log.js';
 import { chebyshevDistance } from './combat.js';
 import { findPath } from './pathfinding.js';
+import { isWalkable, isInBounds } from './walkable.js';
 import {
   addMobToChunk,
   broadcastToChunkArea,
@@ -198,7 +199,8 @@ function tickChase(
 
   if (mob.path.length > 0) return;
 
-  const path = findPath(state.walkable, mob.position, target.position, { maxPathLength: 16 });
+  const chaseTarget = findAdjacentToTarget(state, mob.position, target.position) ?? target.position;
+  const path = findPath(state.walkable, mob.position, chaseTarget, { maxPathLength: 16 });
   if (!path || path.length === 0) return;
 
   const speedTps = def?.stats.movement_speed_tps ?? 2;
@@ -341,4 +343,32 @@ function findNearestPlayer(
 function parseCk(ck: string): Position {
   const parts = ck.split(',');
   return { x: Number(parts[0]) ?? 0, y: Number(parts[1]) ?? 0 };
+}
+
+const ADJACENT_OFFSETS: readonly Position[] = [
+  { x: -1, y: -1 }, { x: 0, y: -1 }, { x: 1, y: -1 },
+  { x: -1, y: 0 },                    { x: 1, y: 0 },
+  { x: -1, y: 1 },  { x: 0, y: 1 },  { x: 1, y: 1 },
+];
+
+function findAdjacentToTarget(
+  state: WorldMatchState,
+  mobPos: Position,
+  targetPos: Position,
+): Position | null {
+  let bestTile: Position | null = null;
+  let bestDist = Infinity;
+
+  for (const off of ADJACENT_OFFSETS) {
+    const tx = targetPos.x + off.x;
+    const ty = targetPos.y + off.y;
+    if (!isInBounds(state.walkable, tx, ty)) continue;
+    if (!isWalkable(state.walkable, tx, ty)) continue;
+    const dist = chebyshevDistance(mobPos, { x: tx, y: ty });
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestTile = { x: tx, y: ty };
+    }
+  }
+  return bestTile;
 }
