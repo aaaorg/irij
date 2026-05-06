@@ -257,7 +257,8 @@ export class CharacterCreationScene extends Phaser.Scene {
         req,
       );
       if (!result.ok) {
-        const msg = ERROR_MESSAGES[result.error.code] ?? `Chyba: ${result.error.message}`;
+        console.warn('create_character error', result.error);
+        const msg = ERROR_MESSAGES[result.error.code] ?? 'Nastala neočekávaná chyba, zkus to znovu.';
         this.setStatus(msg, COLORS.textError);
         this.isSubmitting = false;
         return;
@@ -278,22 +279,8 @@ export class CharacterCreationScene extends Phaser.Scene {
       this.scene.start('WorldScene');
     } catch (err) {
       console.error('create_character failed', err);
-      this.setStatus(`Spojení selhalo: ${formatError(err)}`, COLORS.textError);
+      this.setStatus('Spojení selhalo, zkus to znovu.', COLORS.textError);
       this.isSubmitting = false;
     }
-  }
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  if (err && typeof err === 'object') {
-    const obj = err as Record<string, unknown>;
-    if (typeof obj.message === 'string') return obj.message;
-  }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return 'neznámá chyba';
   }
 }
