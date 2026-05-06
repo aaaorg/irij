@@ -154,7 +154,11 @@ function resolvePlayerAttacks(
 
     const def = state.mobDefinitions[mob.mobId];
     const defense = def?.stats.defense_melee ?? 0;
-    const baseDamage = randomInt(0, 3);
+    // Phase 8 rebalance: bare-hand 1-4 (avg 2.5), aby fresh lvl 1 měl
+    // šanci dorazit krysu/vlka. Weapon damage scaling přijde v Phase 9+
+    // s drag-state caching equipment ve match state (storage read per
+    // attack je drahý). Floor 1 zabraňuje "trefa za 0" feel.
+    const baseDamage = randomInt(1, 4);
     const hitRoll = randomInt(0, 99);
     let damage: number;
     let hitType: HitType;
@@ -162,11 +166,11 @@ function resolvePlayerAttacks(
     if (hitRoll < 5) {
       damage = 0;
       hitType = 'miss';
-    } else if (hitRoll >= 95) {
-      damage = Math.max(0, baseDamage * 2 - defense);
+    } else if (hitRoll >= 97) {
+      damage = Math.max(1, baseDamage * 2 - defense);
       hitType = 'critical';
     } else {
-      damage = Math.max(0, baseDamage - defense);
+      damage = Math.max(1, baseDamage - defense);
       hitType = 'normal';
     }
 
@@ -223,10 +227,13 @@ function resolveMobAttacks(
     let damage: number;
     let hitType: HitType;
 
-    if (hitRoll < 10) {
+    // Phase 8 rebalance: vyšší miss rate (15 %) + crit ceiling 98 →
+    // mob pomaleji dohazuje hráče k smrti, čímž je 5+ killů v řadě
+    // testovatelných bez nutnosti food regen. Late-game bude scaling.
+    if (hitRoll < 15) {
       damage = 0;
       hitType = 'miss';
-    } else if (hitRoll >= 95) {
+    } else if (hitRoll >= 98) {
       damage = baseDamage * 2;
       hitType = 'critical';
     } else {
