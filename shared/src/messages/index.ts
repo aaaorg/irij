@@ -7,3 +7,4 @@ export * from './chat.js';
 export * from './profile.js';
 export * from './xp.js';
 export * from './dialog.js';
+export * from './gathering.js';

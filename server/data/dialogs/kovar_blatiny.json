@@ -22,6 +22,16 @@
           ]
         },
         {
+          "id": "tools",
+          "text": { "cs": "Půjčíš mi nářadí na řemeslo?", "en": "Could you lend me some tools?" },
+          "next": "tools_node",
+          "effects": [
+            { "type": "give_item", "item_id": "tool.pickaxe.bronze", "quantity": 1 },
+            { "type": "give_item", "item_id": "tool.axe.bronze", "quantity": 1 },
+            { "type": "give_item", "item_id": "tool.hammer", "quantity": 1 }
+          ]
+        },
+        {
           "id": "lore_polednice",
           "text": { "cs": "Slyšel jsem o Polednici v bažině...", "en": "I heard about the Lady of Noon in the marsh..." },
           "next": "lore_node",
@@ -43,6 +53,24 @@
         {
           "id": "back",
           "text": { "cs": "Něco jiného...", "en": "Let's talk about something else..." },
+          "next": "root"
+        },
+        {
+          "id": "exit",
+          "text": { "cs": "Sbohem.", "en": "Farewell." },
+          "next": null
+        }
+      ]
+    },
+    "tools_node": {
+      "text": {
+        "cs": "Tady máš krumpáč, sekeru a kladivo. Ber to jako dar starého kováře — stačí, když pak občas přineseš něco, co sám neuneseš.",
+        "en": "Here, take a pickaxe, an axe and a hammer. A gift from the old smith — just bring me something heavy now and then in return."
+      },
+      "options": [
+        {
+          "id": "back",
+          "text": { "cs": "Děkuji ti.", "en": "Thank you." },
           "next": "root"
         },
         {

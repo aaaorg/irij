@@ -357,6 +357,64 @@
     }
   },
   {
+    "id": "material.stone.flint",
+    "category": "material",
+    "tier": 1,
+    "rarity": "common",
+    "name_cs": "Pazourek",
+    "name_en": "Flint",
+    "description_cs": "Tvrdý kámen vhodný pro broušení čepelí.",
+    "weight_kg": 0.4,
+    "stackable": true,
+    "max_stack": 100,
+    "icon": "icons/material/stone_flint.png",
+    "value_denar": 2,
+    "tradeable": true,
+    "destroyable": true
+  },
+  {
+    "id": "tool.pickaxe.bronze",
+    "category": "tool",
+    "tier": 1,
+    "rarity": "common",
+    "name_cs": "Bronzový krumpáč",
+    "name_en": "Bronze Pickaxe",
+    "description_cs": "Krumpáč na těžbu rudy a kamene. Tier 1 mining.",
+    "weight_kg": 1.5,
+    "stackable": false,
+    "max_stack": 1,
+    "icon": "icons/tool/pickaxe_bronze.png",
+    "value_denar": 50,
+    "tradeable": true,
+    "destroyable": true,
+    "specialized": {
+      "tool_type": "pickaxe",
+      "gathering_tier": 1,
+      "skill_used": "mining"
+    }
+  },
+  {
+    "id": "tool.axe.bronze",
+    "category": "tool",
+    "tier": 1,
+    "rarity": "common",
+    "name_cs": "Bronzová sekera",
+    "name_en": "Bronze Axe",
+    "description_cs": "Sekera na kácení stromů. Tier 1 woodcutting.",
+    "weight_kg": 1.8,
+    "stackable": false,
+    "max_stack": 1,
+    "icon": "icons/tool/axe_bronze.png",
+    "value_denar": 50,
+    "tradeable": true,
+    "destroyable": true,
+    "specialized": {
+      "tool_type": "axe",
+      "gathering_tier": 1,
+      "skill_used": "woodcutting"
+    }
+  },
+  {
     "id": "tool.hammer",
     "category": "tool",
     "tier": 1,

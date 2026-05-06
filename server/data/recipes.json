@@ -1,0 +1,55 @@
+[
+  {
+    "id": "recipe.whetstone.t1",
+    "type": "standard",
+    "output": { "item_id": "consumable.whetstone.t1", "quantity": 1 },
+    "inputs": [
+      { "item_id": "material.stone.flint", "quantity": 1 }
+    ],
+    "primary_skill": { "name": "smithing", "level": 1 },
+    "station_required": "smith_forge",
+    "tool_required": "tool.hammer",
+    "crafting_time_ms": 2000,
+    "fail_chance_pct": 0,
+    "xp_award": {
+      "smithing": 30,
+      "strength": 5
+    }
+  },
+  {
+    "id": "recipe.weapon.dagger.bronze",
+    "type": "standard",
+    "output": { "item_id": "weapon.melee.dagger.bronze", "quantity": 1 },
+    "inputs": [
+      { "item_id": "material.ore.copper", "quantity": 1 },
+      { "item_id": "material.wood.oak", "quantity": 1 }
+    ],
+    "primary_skill": { "name": "smithing", "level": 1 },
+    "station_required": "smith_forge",
+    "tool_required": "tool.hammer",
+    "crafting_time_ms": 4000,
+    "fail_chance_pct": 5,
+    "xp_award": {
+      "smithing": 80,
+      "strength": 12
+    }
+  },
+  {
+    "id": "recipe.weapon.sword.bronze",
+    "type": "standard",
+    "output": { "item_id": "weapon.melee.sword.bronze", "quantity": 1 },
+    "inputs": [
+      { "item_id": "material.ore.copper", "quantity": 2 },
+      { "item_id": "material.wood.oak", "quantity": 1 }
+    ],
+    "primary_skill": { "name": "smithing", "level": 5 },
+    "station_required": "smith_forge",
+    "tool_required": "tool.hammer",
+    "crafting_time_ms": 5000,
+    "fail_chance_pct": 8,
+    "xp_award": {
+      "smithing": 150,
+      "strength": 25
+    }
+  }
+]

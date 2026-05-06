@@ -128,9 +128,9 @@ test('dialog: open NPC dialog → click option → close', async ({ page }) => {
     timeout: 5_000,
   });
 
-  // 10) Options rendered — at least the 3 visible options (smalltalk, shop, exit).
+  // 10) Options rendered — 4 visible options (smalltalk, shop, tools, exit). Lore option je gated.
   const optionButtons = dialogPanel.locator('#irij-dialog-options button');
-  await expect(optionButtons).toHaveCount(3, { timeout: 5_000 });
+  await expect(optionButtons).toHaveCount(4, { timeout: 5_000 });
 
   // 11) Click "Co máš na prodej?" option (gives whetstone, returns to root via shop_node)
   const shopBtn = optionButtons.filter({ hasText: 'Co máš na prodej' });

@@ -8,15 +8,21 @@ import type { Position } from '../types/world.js';
 // joiner-only dostává WORLD_SNAPSHOT).
 export interface EntitySpawned {
   entity_id: string; // userId pro player; mob/npc/drop ID pro ostatní typy
-  type: 'player' | 'mob' | 'npc' | 'drop';
+  type: 'player' | 'mob' | 'npc' | 'drop' | 'resource_node' | 'craft_station';
   position: Position;
   display_name?: string; // jen pro type='player' (HUD label)
   hp_pct?: number; // 0..1, jen pro entity s HP barem
   mob_id?: string; // jen pro type='mob' — klíč do mob definitions (pro sprite lookup)
-  display_name_cs?: string; // jen pro type='mob' — lokalizovaný název
+  display_name_cs?: string; // jen pro type='mob'/npc/resource_node/craft_station — lokalizovaný název
   level?: number; // jen pro type='mob' — pro HP bar label
   items?: Array<{ item_id: string; quantity: number }>; // jen pro type='drop'
   npc_id?: string; // jen pro type='npc' — klíč do NPC definitions
+  // Phase 10
+  resource_node_id?: string; // jen pro type='resource_node' — klíč do node definitions
+  resource_kind?: 'ore_node' | 'tree' | 'fish_spot' | 'herb'; // jen pro type='resource_node'
+  resource_state?: 'available' | 'depleted'; // jen pro type='resource_node'
+  station_id?: string; // jen pro type='craft_station'
+  station_type?: string; // jen pro type='craft_station' — např. 'smith_forge'
 }
 
 // Op.ENTITY_DESPAWNED (71) — server → klient broadcast.

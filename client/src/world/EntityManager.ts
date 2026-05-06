@@ -35,6 +35,12 @@ export class EntityManager {
   readonly tilePositions = new Map<string, Position>();
   // Tile positions for drop entities (separate map for O(1) pickup detection).
   readonly dropTilePositions = new Map<string, Position>();
+  // Phase 10: resource nodes + craft stations.
+  readonly resourceNodeSprites = new Map<string, Phaser.GameObjects.Container>();
+  readonly resourceNodePositions = new Map<string, Position>();
+  readonly craftStationSprites = new Map<string, Phaser.GameObjects.Container>();
+  readonly craftStationPositions = new Map<string, Position>();
+  readonly craftStationTypes = new Map<string, string>();
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -117,6 +123,88 @@ export class EntityManager {
     return this.npcTilePositions.get(instanceId);
   }
 
+  // Phase 10: Resource node placeholder — colored circle + label, depth ~props band.
+  spawnResourceNode(entity: WorldSnapshotEntity): void {
+    if (!entity?.id || entity.type !== 'resource_node' || this.resourceNodeSprites.has(entity.id)) return;
+
+    const { x, y } = entity.position;
+    const center = tileCenterPx(x, y);
+    const kind = entity.resource_kind ?? 'ore_node';
+    const color = kind === 'tree' ? 0x2d6a2f : kind === 'ore_node' ? 0x8a8580 : 0xb56a3e;
+    const circle = this.scene.add.circle(0, -8, 14, color).setStrokeStyle(2, 0xffeeaa);
+    const label = this.scene.add
+      .text(0, -28, entity.display_name_cs ?? 'Surovinový bod', {
+        fontSize: '10px',
+        color: '#f7e9c8',
+        backgroundColor: '#000000a0',
+        padding: { x: 3, y: 1 },
+      })
+      .setOrigin(0.5, 1);
+    const container = this.scene.add.container(center.x, center.y, [circle, label]);
+    container.setDepth(depthForDynamic(y) - 2);
+    container.setData('resourceNodeId', entity.id);
+    container.setData('resourceKind', kind);
+
+    this.resourceNodeSprites.set(entity.id, container);
+    this.resourceNodePositions.set(entity.id, { x, y });
+  }
+
+  findResourceNodeAtTile(tileX: number, tileY: number): string | null {
+    for (const [nodeId, pos] of this.resourceNodePositions) {
+      if (pos.x === tileX && pos.y === tileY) return nodeId;
+    }
+    return null;
+  }
+
+  getResourceNodePosition(nodeId: string): Position | undefined {
+    return this.resourceNodePositions.get(nodeId);
+  }
+
+  // Phase 10: Craft station placeholder — orange square + name label.
+  spawnCraftStation(entity: WorldSnapshotEntity): void {
+    if (!entity?.id || entity.type !== 'craft_station' || this.craftStationSprites.has(entity.id)) return;
+
+    const { x, y } = entity.position;
+    const center = tileCenterPx(x, y);
+    const stationType = entity.station_type ?? 'smith_forge';
+    const color = stationType === 'smith_forge' ? 0xc25c2c : 0xa37b3d;
+    const rect = this.scene.add.rectangle(0, -10, 26, 26, color).setStrokeStyle(2, 0xffeeaa);
+    const label = this.scene.add
+      .text(0, -32, entity.display_name_cs ?? 'Kovárna', {
+        fontSize: '10px',
+        color: '#f7e9c8',
+        backgroundColor: '#000000a0',
+        padding: { x: 3, y: 1 },
+      })
+      .setOrigin(0.5, 1);
+    const container = this.scene.add.container(center.x, center.y, [rect, label]);
+    container.setDepth(depthForDynamic(y) - 2);
+    container.setData('stationId', entity.id);
+    container.setData('stationType', stationType);
+
+    this.craftStationSprites.set(entity.id, container);
+    this.craftStationPositions.set(entity.id, { x, y });
+    this.craftStationTypes.set(entity.id, stationType);
+  }
+
+  findCraftStationAtTile(tileX: number, tileY: number): string | null {
+    for (const [id, pos] of this.craftStationPositions) {
+      if (pos.x === tileX && pos.y === tileY) return id;
+    }
+    return null;
+  }
+
+  // Vrátí true pokud je hráč ≤ 2 dlaždice (Chebyshev) od libovolné stanice
+  // požadovaného typu.
+  isStationInRange(playerX: number, playerY: number, stationType: string): boolean {
+    for (const [id, pos] of this.craftStationPositions) {
+      if (this.craftStationTypes.get(id) !== stationType) continue;
+      const cheb = Math.max(Math.abs(playerX - pos.x), Math.abs(playerY - pos.y));
+      if (cheb <= 2) return true;
+    }
+    return false;
+  }
+
   spawnDrop(entity: WorldSnapshotEntity): void {
     if (!entity?.id || this.dropSprites.has(entity.id)) return;
 
@@ -177,6 +265,21 @@ export class EntityManager {
       npc.destroy();
       this.npcSprites.delete(entityId);
       this.npcTilePositions.delete(entityId);
+      return;
+    }
+    const node = this.resourceNodeSprites.get(entityId);
+    if (node) {
+      node.destroy();
+      this.resourceNodeSprites.delete(entityId);
+      this.resourceNodePositions.delete(entityId);
+      return;
+    }
+    const station = this.craftStationSprites.get(entityId);
+    if (station) {
+      station.destroy();
+      this.craftStationSprites.delete(entityId);
+      this.craftStationPositions.delete(entityId);
+      this.craftStationTypes.delete(entityId);
     }
   }
 
@@ -189,8 +292,15 @@ export class EntityManager {
     this.dropSprites.clear();
     for (const s of this.npcSprites.values()) s.destroy();
     this.npcSprites.clear();
+    for (const s of this.resourceNodeSprites.values()) s.destroy();
+    this.resourceNodeSprites.clear();
+    for (const s of this.craftStationSprites.values()) s.destroy();
+    this.craftStationSprites.clear();
     this.tilePositions.clear();
     this.dropTilePositions.clear();
     this.npcTilePositions.clear();
+    this.resourceNodePositions.clear();
+    this.craftStationPositions.clear();
+    this.craftStationTypes.clear();
   }
 }

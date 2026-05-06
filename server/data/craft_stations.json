@@ -1,0 +1,8 @@
+[
+  {
+    "id": "station.smith_forge.kovar",
+    "station_type": "smith_forge",
+    "name_cs": "Kovárna",
+    "position": { "x": 26, "y": 25 }
+  }
+]

@@ -195,6 +195,18 @@ export function profileCreateCharacter(
     item_id: null,
     quantity: 0,
   }));
+  // Phase 10 starter kit — tool.pickaxe.bronze + tool.axe.bronze + tool.hammer
+  // dovolují gathering (kámen/dřevo) a smith_forge crafting hned po char create.
+  // Starší character accounty mohou nářadí získat přes kovářův dialog (option
+  // "Půjčíš mi nářadí na řemeslo?").
+  const STARTER_TOOLS = ['tool.pickaxe.bronze', 'tool.axe.bronze', 'tool.hammer'];
+  for (let i = 0; i < STARTER_TOOLS.length; i++) {
+    const slot = inventory[i];
+    if (slot) {
+      slot.item_id = STARTER_TOOLS[i] ?? null;
+      slot.quantity = 1;
+    }
+  }
   const satchel: SatchelEntry[] = [];
   const equipment: EquipmentEntry[] = EQUIPMENT_SLOTS.map((slot) => ({
     slot,

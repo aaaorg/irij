@@ -52,6 +52,13 @@ function makeState(presences: Record<string, PlayerPresenceState>): WorldMatchSt
     npcInstances: {},
     npcsByChunk: {},
     dialogSessions: {},
+    resourceNodeDefinitions: {},
+    resourceNodes: {},
+    resourceNodesByChunk: {},
+    craftStations: {},
+    craftStationsByChunk: {},
+    gatherSessions: {},
+    craftSessions: {},
   };
 }
 
