@@ -60,7 +60,7 @@ export class EquipmentPanel {
       display: none;
       position: fixed;
       top: 60px;
-      right: 284px;
+      right: 310px;
       width: 180px;
       background: rgba(20, 12, 6, 0.97);
       border: 1px solid #6b4a32;

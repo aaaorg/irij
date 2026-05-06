@@ -9,7 +9,7 @@ import type {
   GetSelfResponse,
 } from 'irij-shared/messages';
 import type { Gender } from 'irij-shared/types';
-import { callRpc } from '../rpc.js';
+import { callRpc, callRpcSafe } from '../rpc.js';
 import type { NakamaConnection } from '../nakama.js';
 import { REGISTRY_KEY_CONNECTION, REGISTRY_KEY_PLAYER } from './LoginScene.js';
 
@@ -251,13 +251,13 @@ export class CharacterCreationScene extends Phaser.Scene {
     };
 
     try {
-      const res = await callRpc<CreateCharacterRequest, CreateCharacterResponse>(
+      const result = await callRpcSafe<CreateCharacterRequest, CreateCharacterResponse>(
         this.connection,
         'rpc.profile.create_character',
         req,
       );
-      if (!res.ok) {
-        const msg = ERROR_MESSAGES[res.error] ?? `Chyba: ${res.error}`;
+      if (!result.ok) {
+        const msg = ERROR_MESSAGES[result.error.code] ?? `Chyba: ${result.error.message}`;
         this.setStatus(msg, COLORS.textError);
         this.isSubmitting = false;
         return;
@@ -287,6 +287,10 @@ export class CharacterCreationScene extends Phaser.Scene {
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'string') return err;
+  if (err && typeof err === 'object') {
+    const obj = err as Record<string, unknown>;
+    if (typeof obj.message === 'string') return obj.message;
+  }
   try {
     return JSON.stringify(err);
   } catch {
