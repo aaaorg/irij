@@ -10,7 +10,7 @@ import type {
   WorldSnapshot,
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
-import { DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
+import { DEFAULT_HP, DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, screenToTile, tileCenterPx } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -329,7 +329,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     if (payload.target_id === this.selfUserId && this.player) {
-      const hpMax = (this.player.getData('hpMax') as number) ?? 10;
+      const hpMax = (this.player.getData('hpMax') as number) ?? DEFAULT_HP;
       if (hpMax > 0) {
         this.hpBars.update('self', payload.remaining_hp / hpMax, () => this.player);
       }
@@ -392,7 +392,7 @@ export class WorldScene extends Phaser.Scene {
       const px = tileCenterPx(spawnPos.x, spawnPos.y);
       this.player.setPosition(px.x, px.y);
       this.player.setDepth(depthForDynamic(spawnPos.y));
-      this.player.setData('hpCurrent', (this.player.getData('hpMax') as number) ?? 10);
+      this.player.setData('hpCurrent', (this.player.getData('hpMax') as number) ?? DEFAULT_HP);
     }
 
     showToast(this, 'Zemřel jsi!', '#ff4444');
@@ -417,7 +417,10 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    this.hpBars.updateAllPositions((id) => this.resolveSprite(id));
+    this.hpBars.updateAllPositions((id) => {
+      if (id === 'self') return this.player;
+      return this.resolveSprite(id);
+    });
 
     if (this.combat.pendingAttackTarget) {
       this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
@@ -481,7 +484,7 @@ export class WorldScene extends Phaser.Scene {
       .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
       .setOrigin(0.5, 1)
       .setDepth(depthForDynamic(y));
-    this.player.setData('hpMax', profile.player_state.hp_max ?? 10);
+    this.player.setData('hpMax', profile.player_state.hp_max ?? DEFAULT_HP);
 
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
   }
