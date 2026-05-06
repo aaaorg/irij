@@ -46,13 +46,32 @@ export type DialogEffect =
   | { type: 'start_quest'; quest_id: string }
   | { type: 'complete_quest_step'; quest_id: string; step_id: string };
 
-// Visibility podmínka — všechny musí být splněny aby se option zobrazila.
-// MVP supportuje jen `always_available` flag. Knowledge/quest/reputation gates
-// jsou data-shape definované, ale enforce-uje se vždy true (Phase 11+ doplní).
+// Visibility podmínka — všechny conditions musí být splněny aby se option zobrazila.
+// Phase 11 implementuje knowledge / reputation_min / quest_state gates proti
+// PlayerQuestBlob. Pre-Phase-11 implementace vracela vždy `false` pokud bylo
+// `show_if` nastavené (skryla zamčené options); po Phase 11 vrací true/false
+// podle skutečného player state.
 export interface DialogOptionVisibility {
-  knowledge?: string; // unlock id required (Phase 11+)
-  reputation_min?: number; // village reputation threshold (Phase 11+)
-  quest_state?: { quest_id: string; state: 'not_started' | 'active' | 'completed' };
+  // Vyžaduje knowledge_id v PlayerQuestBlob.knowledge.
+  knowledge?: string;
+  // Per-village reputation threshold. Klíč je `village_id`, hodnota je min hodnota.
+  // Např. `{ village_id: 'village.blatiny', value: 300 }`.
+  reputation_min?: { village_id: string; value: number };
+  // Quest state gate. `state` enum mapping:
+  //   'not_started' — quest není v active ani completed mapě
+  //   'active'      — quest je v active mapě
+  //   'completed'   — quest je v completed mapě
+  // `current_step_id` (volitelné): pokud je nastaveno a `state === 'active'`,
+  //  vyžaduje exact match na PlayerQuestProgress.current_step_id.
+  // `not_current_step_id` (volitelné): naopak — viditelné jen pokud current
+  //  step JE NĚCO JINÉHO. Slouží pro generic "in progress" options, které
+  //  nesmí kolidovat s final step option v root menu.
+  quest_state?: {
+    quest_id: string;
+    state: 'not_started' | 'active' | 'completed';
+    current_step_id?: string;
+    not_current_step_id?: string;
+  };
 }
 
 export interface DialogOption {

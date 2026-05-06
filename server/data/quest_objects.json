@@ -1,0 +1,9 @@
+[
+  {
+    "id": "object.bloody_amulet",
+    "display_name_cs": "Krvavý amulet",
+    "display_name_en": "Bloody Amulet",
+    "position": { "x": 35, "y": 35 },
+    "consume_on_interact": true
+  }
+]

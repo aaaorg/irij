@@ -30,7 +30,7 @@ import type {
   SkillRow,
 } from 'irij-shared/types';
 import { int, obj, oneOf, parse, str } from 'irij-shared';
-import { asPlayer, asPlayerState } from 'irij-shared/types';
+import { asPlayer, asPlayerState, emptyQuestBlob } from 'irij-shared/types';
 import { logAudit } from '../lib/audit.js';
 import { RpcError } from '../lib/errors.js';
 import { log } from '../lib/log.js';
@@ -251,6 +251,14 @@ export function profileCreateCharacter(
       key: userId,
       userId,
       value: { inventory, satchel, equipment },
+      permissionRead: PERMISSION_OWNER_READ,
+      permissionWrite: PERMISSION_NO_WRITE,
+    },
+    {
+      collection: STORAGE_COLLECTIONS.PLAYER_QUESTS,
+      key: userId,
+      userId,
+      value: emptyQuestBlob(),
       permissionRead: PERMISSION_OWNER_READ,
       permissionWrite: PERMISSION_NO_WRITE,
     },

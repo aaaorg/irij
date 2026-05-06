@@ -128,9 +128,11 @@ test('dialog: open NPC dialog → click option → close', async ({ page }) => {
     timeout: 5_000,
   });
 
-  // 10) Options rendered — 4 visible options (smalltalk, shop, tools, exit). Lore option je gated.
+  // 10) Options rendered — 5 visible options pro fresh char (smalltalk, shop, tools,
+  //     quest_offer, exit). Quest_active_check / quest_complete / quest_lore gated; vidíme je
+  //     jen v specific quest stavech (Phase 11 quest engine).
   const optionButtons = dialogPanel.locator('#irij-dialog-options button');
-  await expect(optionButtons).toHaveCount(4, { timeout: 5_000 });
+  await expect(optionButtons).toHaveCount(5, { timeout: 5_000 });
 
   // 11) Click "Co máš na prodej?" option (gives whetstone, returns to root via shop_node)
   const shopBtn = optionButtons.filter({ hasText: 'Co máš na prodej' });

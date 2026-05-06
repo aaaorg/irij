@@ -2,9 +2,10 @@ import type { EquipmentSlot } from '../types/player.js';
 
 // Op.INTERACT_OBJECT (31) — klient → server.
 // Pickup: object_id = dropId, action = 'pickup'.
+// Quest object interact: object_id = quest_object instanceId, action = 'interact'.
 export interface InteractObjectRequest {
   object_id: string;
-  action: 'pickup' | 'open' | 'examine';
+  action: 'pickup' | 'open' | 'examine' | 'interact';
 }
 
 export interface ItemDropRequest {

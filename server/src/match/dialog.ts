@@ -32,6 +32,16 @@ import { getItemDef } from '../lib/items.js';
 import { log } from '../lib/log.js';
 import { withOCCRetry } from '../lib/storage.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
+import {
+  changeReputation,
+  checkOptionVisibility,
+  getQuestBlob,
+  progressObjective,
+  sendQuestProgress,
+  tryStartQuest,
+  unlockKnowledge,
+} from './quest.js';
+import { getQuestDef } from '../lib/quests.js';
 import type {
   DialogSessionState,
   NpcInstanceState,
@@ -87,21 +97,29 @@ function chebyshevDistance(
 }
 
 // ── Option visibility filter ────────────────────────────────────────────────
-// Phase 9: knowledge / quest / reputation gates jsou stub — vždy true pokud
-// `show_if` je definováno. Phase 11+ doplní real check proti player profile.
+// Phase 11: knowledge / quest_state / reputation gates jsou plně implementované
+// proti PlayerQuestBlob (mirror v match state). Pokud option nemá `show_if`,
+// je vždy viditelná. Pre-Phase-11 implementace vracela vždy `false` pokud
+// `show_if` bylo nastavené (silná hide); Phase 11 evaluuje skutečný stav.
 
-export function isOptionVisible(option: DialogOption): boolean {
+export function isOptionVisible(
+  option: DialogOption,
+  state: WorldMatchState,
+  userId: string,
+): boolean {
   if (!option.show_if) return true;
-  // Phase 11+ TODO: check knowledge, quest_state, reputation_min
-  // Pro Phase 9 záměrně ne-zobrazujeme gated options aby tester nezahltil dialog
-  // tree. Pokud option má `show_if`, přeskočíme — bezpečné default.
-  return false;
+  const blob = getQuestBlob(state, userId);
+  return checkOptionVisibility(blob, option.show_if);
 }
 
-function buildOptionPayloads(node: DialogNode): DialogOptionPayload[] {
+function buildOptionPayloads(
+  node: DialogNode,
+  state: WorldMatchState,
+  userId: string,
+): DialogOptionPayload[] {
   const out: DialogOptionPayload[] = [];
   for (const option of node.options) {
-    if (!isOptionVisible(option)) continue;
+    if (!isOptionVisible(option, state, userId)) continue;
     out.push({
       id: option.id,
       text: option.text,
@@ -208,7 +226,7 @@ export function handleInteractNpc(
 }
 
 function sendDialogNode(
-  _state: WorldMatchState,
+  state: WorldMatchState,
   dispatcher: nkruntime.MatchDispatcher,
   presence: nkruntime.Presence,
   tree: DialogTree,
@@ -226,7 +244,7 @@ function sendDialogNode(
     speaker_npc_id: node.speaker_npc_id ?? npc.npcId,
     speaker_display_name_cs: speakerDisplayName,
     text: node.text,
-    options: buildOptionPayloads(node),
+    options: buildOptionPayloads(node, state, presence.userId),
   };
   dispatcher.broadcastMessage(Op.DIALOG_OPEN, JSON.stringify(payload), [presence]);
 }
@@ -308,7 +326,7 @@ export function handleDialogChoose(
   }
 
   const option = node.options.find((o) => o.id === req.option_id);
-  if (!option || !isOptionVisible(option)) {
+  if (!option || !isOptionVisible(option, state, userId)) {
     sendDialogClose(dispatcher, presence, session.dialogId, 'invalid_option');
     closeSession(state, userId);
     return;
@@ -317,7 +335,7 @@ export function handleDialogChoose(
   // Apply effects.
   if (option.effects && option.effects.length > 0) {
     for (const effect of option.effects) {
-      applyDialogEffect(state, logger, nk, dispatcher, presence, effect);
+      applyDialogEffect(state, logger, nk, dispatcher, presence, npc.instanceId, effect);
     }
   }
 
@@ -358,6 +376,7 @@ function applyDialogEffect(
   nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   presence: nkruntime.Presence,
+  npcInstanceId: string,
   effect: DialogEffect,
 ): void {
   const userId = presence.userId;
@@ -390,17 +409,62 @@ function applyDialogEffect(
         payload: { item_id: effect.item_id, quantity: effect.quantity },
       });
       break;
-    case 'unlock_knowledge':
-    case 'change_reputation':
-    case 'start_quest':
-    case 'complete_quest_step':
-      // Phase 11+ TODO. Pro Phase 9 jen audit log + soft no-op.
-      log(logger, 'debug', 'dialog effect not yet implemented', { type: effect.type });
-      logAudit(nk, `dialog_effect_stub_${effect.type}`, {
-        userId,
-        payload: { effect: effect as unknown as Record<string, unknown> },
+    case 'unlock_knowledge': {
+      const added = unlockKnowledge(state, nk, logger, userId, effect.knowledge_id);
+      log(logger, 'info', 'dialog unlock_knowledge', {
+        userId: userId.slice(0, 8),
+        knowledgeId: effect.knowledge_id,
+        added,
       });
       break;
+    }
+    case 'change_reputation': {
+      const newValue = changeReputation(
+        state,
+        nk,
+        logger,
+        userId,
+        effect.village_id,
+        effect.delta,
+      );
+      log(logger, 'info', 'dialog change_reputation', {
+        userId: userId.slice(0, 8),
+        villageId: effect.village_id,
+        delta: effect.delta,
+        newValue,
+      });
+      break;
+    }
+    case 'start_quest': {
+      const result = tryStartQuest(state, nk, logger, userId, effect.quest_id);
+      if (result.ok) {
+        const firstStep = result.def.steps[0] ?? null;
+        sendQuestProgress(dispatcher, presence, result.def, result.progress, firstStep, 'started');
+      } else {
+        log(logger, 'debug', 'start_quest rejected', {
+          userId: userId.slice(0, 8),
+          questId: effect.quest_id,
+          reason: result.reason,
+        });
+      }
+      break;
+    }
+    case 'complete_quest_step': {
+      // Resolve which NPC the player is talking to (npcInstanceId === def.id v MVP).
+      const npc = state.npcInstances[npcInstanceId];
+      const npcDefId = npc ? npc.npcId : npcInstanceId;
+      // Validate step's objective is talk_to_npc to this NPC; quest engine
+      // guards mismatches.
+      const def = getQuestDef(effect.quest_id);
+      if (!def) break;
+      progressObjective(state, nk, logger, dispatcher, presence, {
+        type: 'talk_to_npc',
+        npc_id: npcDefId,
+        quest_id: effect.quest_id,
+        step_id: effect.step_id,
+      });
+      break;
+    }
     default: {
       const _exhaustive: never = effect;
       void _exhaustive;

@@ -26,6 +26,7 @@ import type {
   LootTable,
   MobSpawnPoint,
   NpcDefinition,
+  QuestObjectDefinition,
   ResourceNodeDefinition,
   SkillRow,
 } from 'irij-shared/types';
@@ -38,10 +39,12 @@ import mobSpawnsData from '../../data/mob_spawns.json';
 
 import { log } from '../lib/log.js';
 import { getAllNpcs } from '../lib/dialogs.js';
+import { getAllQuestObjects } from '../lib/quests.js';
 import { getAllCraftStations, getAllResourceNodeDefs } from '../lib/recipes.js';
 import { savePlayersState } from './autosave.js';
 import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
 import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
+import { loadPlayerQuestBlob, sendActiveQuestsSnapshot } from './quest.js';
 import {
   cleanupDialogSession,
   handleDialogChoose,
@@ -75,6 +78,7 @@ import {
   addMobToChunk,
   addNpcToChunk,
   addPresenceToChunk,
+  addQuestObjectToChunk,
   addResourceNodeToChunk,
   broadcastToChunkArea,
   chunkKeyOf,
@@ -83,6 +87,7 @@ import {
   type MobInstanceState,
   type NpcInstanceState,
   type PlayerPresenceState,
+  type QuestObjectInstanceState,
   type ResourceNodeInstanceState,
   type WorldMatchState,
 } from './state.js';
@@ -197,6 +202,25 @@ export function matchInit(
     craftStationsByChunkInit[ck] = { ...craftStationsByChunkInit[ck], [stDef.id]: true };
   }
 
+  // Phase 11: quest objects.
+  const questObjectDefinitions: { [defId: string]: QuestObjectDefinition } = {};
+  const questObjectInstances: { [instanceId: string]: QuestObjectInstanceState } = {};
+  const questObjectsByChunkInit: { [ck: string]: { [instanceId: string]: true } } = {};
+  for (const qod of getAllQuestObjects()) {
+    questObjectDefinitions[qod.id] = qod;
+    const instanceId = qod.id; // 1:1 mapping pro MVP
+    const ck = chunkKeyOf(qod.position);
+    questObjectInstances[instanceId] = {
+      instanceId,
+      defId: qod.id,
+      position: { ...qod.position },
+      lastChunk: ck,
+      consumed: false,
+    };
+    if (!questObjectsByChunkInit[ck]) questObjectsByChunkInit[ck] = {};
+    questObjectsByChunkInit[ck] = { ...questObjectsByChunkInit[ck], [instanceId]: true };
+  }
+
   log(logger, 'info', 'World match init', {
     width: walkable.width,
     height: walkable.height,
@@ -206,6 +230,7 @@ export function matchInit(
     npcs: Object.keys(npcInstances).length,
     resourceNodes: Object.keys(resourceNodes).length,
     craftStations: Object.keys(craftStations).length,
+    questObjects: Object.keys(questObjectInstances).length,
   });
 
   const state: WorldMatchState = {
@@ -234,6 +259,11 @@ export function matchInit(
     craftStationsByChunk: craftStationsByChunkInit,
     gatherSessions: {},
     craftSessions: {},
+    questObjectDefinitions,
+    questObjectInstances,
+    questObjectsByChunk: questObjectsByChunkInit,
+    playerQuestBlobs: {},
+    playerQuestVersions: {},
   };
   return {
     state,
@@ -326,6 +356,11 @@ export function matchJoin(
 
     state.presencesByUserId[userId] = ps;
     addPresenceToChunk(state, userId, position);
+
+    // Phase 11: load PlayerQuestBlob (lazy create if missing) into match state mirror.
+    const questLoad = loadPlayerQuestBlob(nk, logger, userId);
+    state.playerQuestBlobs = { ...state.playerQuestBlobs, [userId]: questLoad.blob };
+    state.playerQuestVersions = { ...state.playerQuestVersions, [userId]: questLoad.version };
 
     const visibleEntities: WorldSnapshotEntity[] = [];
     const recipientsInArea = recipientsInRangeOfChunk(state, lastChunk);
@@ -439,6 +474,21 @@ export function matchJoin(
       });
     }
 
+    // Phase 11: Include quest objects (only non-consumed) in snapshot.
+    for (const objectId of Object.keys(state.questObjectInstances)) {
+      const obj = state.questObjectInstances[objectId];
+      if (!obj || obj.consumed) continue;
+      if (chunkDistFromKeys(lastChunk, obj.lastChunk) > 1) continue;
+      const def = state.questObjectDefinitions[obj.defId];
+      visibleEntities.push({
+        id: obj.instanceId,
+        type: 'quest_object',
+        position: obj.position,
+        quest_object_id: obj.defId,
+        display_name_cs: def?.display_name_cs,
+      });
+    }
+
     // Include ground drops in snapshot
     for (const dropId of Object.keys(state.dropInstances)) {
       const drop = state.dropInstances[dropId];
@@ -469,6 +519,9 @@ export function matchJoin(
       hp_pct: hpMax > 0 ? hpCurrent / hpMax : 1,
     };
     broadcastToChunkArea(dispatcher, state, lastChunk, Op.ENTITY_SPAWNED, spawnPayload, userId);
+
+    // Phase 11: send active quest snapshot — klient zinicializuje quest log UI.
+    sendActiveQuestsSnapshot(dispatcher, presence, questLoad.blob);
 
     log(logger, 'info', 'matchJoin', {
       displayName,
@@ -537,6 +590,17 @@ export function matchLeave(
     cleanupDialogSession(state, userId);
     cleanupGatherSession(state, userId);
     cleanupCraftSession(state, userId);
+
+    if (state.playerQuestBlobs[userId]) {
+      const next = { ...state.playerQuestBlobs };
+      delete next[userId];
+      state.playerQuestBlobs = next;
+    }
+    if (state.playerQuestVersions[userId]) {
+      const next = { ...state.playerQuestVersions };
+      delete next[userId];
+      state.playerQuestVersions = next;
+    }
 
     // Release mob targeting this player
     for (const instanceId of Object.keys(state.mobInstances)) {

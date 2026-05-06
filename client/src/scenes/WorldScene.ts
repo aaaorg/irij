@@ -17,6 +17,8 @@ import type {
   InventoryChanged,
   LevelUp,
   MoveRejected,
+  QuestCompleted,
+  QuestProgress,
   WorldSnapshot,
   XpAwarded,
 } from 'irij-shared/messages';
@@ -47,6 +49,7 @@ import { SkillPanel } from '../ui/SkillPanel.js';
 import { DialogPanel } from '../ui/DialogPanel.js';
 import { CraftingPanel, CRAFTING_RECIPES } from '../ui/CraftingPanel.js';
 import { GatherProgressBar } from '../ui/GatherProgressBar.js';
+import { QuestPanel } from '../ui/QuestPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -98,6 +101,12 @@ export class WorldScene extends Phaser.Scene {
   private pendingGatherNodeId: string | null = null;
   private lastGatherSentAt = 0;
 
+  // Phase 11: quest log + pending quest object interact (analog gather/NPC approach).
+  private questPanel?: QuestPanel;
+  private questToggleKey?: Phaser.Input.Keyboard.Key;
+  private pendingQuestObjectId: string | null = null;
+  private lastQuestObjectSentAt = 0;
+
   constructor() {
     super('WorldScene');
   }
@@ -147,6 +156,7 @@ export class WorldScene extends Phaser.Scene {
     this.buildSkillUI();
     this.buildDialogUI();
     this.buildCraftingUI();
+    this.buildQuestUI();
 
     this.entities = new EntityManager(this, userId);
     this.hpBars = new HpBarManager(this);
@@ -267,6 +277,12 @@ export class WorldScene extends Phaser.Scene {
         case Op.CRAFT_COMPLETED:
           this.handleCraftCompleted(payload as CraftCompleted);
           break;
+        case Op.QUEST_PROGRESS:
+          this.handleQuestProgress(payload as QuestProgress);
+          break;
+        case Op.QUEST_COMPLETED:
+          this.handleQuestCompleted(payload as QuestCompleted);
+          break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
       }
@@ -325,6 +341,8 @@ export class WorldScene extends Phaser.Scene {
         this.entities.spawnResourceNode(entity);
       } else if (entity.type === 'craft_station') {
         this.entities.spawnCraftStation(entity);
+      } else if (entity.type === 'quest_object') {
+        this.entities.spawnQuestObject(entity);
       }
     }
   }
@@ -386,6 +404,14 @@ export class WorldScene extends Phaser.Scene {
         position: payload.position,
         station_id: payload.station_id,
         station_type: payload.station_type,
+        display_name_cs: payload.display_name_cs,
+      });
+    } else if (payload.type === 'quest_object') {
+      this.entities.spawnQuestObject({
+        id: payload.entity_id,
+        type: 'quest_object',
+        position: payload.position,
+        quest_object_id: payload.quest_object_id,
         display_name_cs: payload.display_name_cs,
       });
     }
@@ -531,7 +557,8 @@ export class WorldScene extends Phaser.Scene {
       this.movement.moveStates.size === 0 &&
       this.hpBars.size === 0 &&
       this.pendingNpcInteract === null &&
-      this.pendingGatherNodeId === null
+      this.pendingGatherNodeId === null &&
+      this.pendingQuestObjectId === null
     )
       return;
 
@@ -541,6 +568,7 @@ export class WorldScene extends Phaser.Scene {
         this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
         this.tickNpcApproach();
         this.tickGatherApproach();
+        this.tickQuestObjectApproach();
       }
     }
 
@@ -557,6 +585,9 @@ export class WorldScene extends Phaser.Scene {
     }
     if (this.pendingGatherNodeId) {
       this.tickGatherApproach();
+    }
+    if (this.pendingQuestObjectId) {
+      this.tickQuestObjectApproach();
     }
   }
 
@@ -619,6 +650,13 @@ export class WorldScene extends Phaser.Scene {
     const stationId = this.entities.findCraftStationAtTile(tile.x, tile.y);
     if (stationId) {
       this.craftingPanel?.show();
+      return;
+    }
+
+    // Phase 11: quest object — interact flow (navigate to + INTERACT_OBJECT).
+    const questObjId = this.entities.findQuestObjectAtTile(tile.x, tile.y);
+    if (questObjId) {
+      this.handleQuestObjectClick(questObjId);
       return;
     }
 
@@ -721,6 +759,126 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(100_000)
       .setInteractive({ useHandCursor: true });
     crBtn.on('pointerdown', () => this.craftingPanel?.toggle());
+
+    // Quest log button (Phase 11).
+    const qBtn = this.add
+      .text(312, 40, '[Q] Questy', { fontSize: '12px', color: '#c8a86a', backgroundColor: '#00000080', padding: { x: 4, y: 2 } })
+      .setScrollFactor(0)
+      .setDepth(100_000)
+      .setInteractive({ useHandCursor: true });
+    qBtn.on('pointerdown', () => this.questPanel?.toggle());
+  }
+
+  private buildQuestUI(): void {
+    this.questPanel = new QuestPanel();
+    if (this.input.keyboard) {
+      this.questToggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
+      this.questToggleKey.on('down', () => this.questPanel?.toggle());
+    }
+  }
+
+  private handleQuestProgress(payload: QuestProgress): void {
+    if (!payload || !this.questPanel) return;
+    this.questPanel.onProgress(payload);
+    if (payload.event === 'started') {
+      showToast(this, `Nový quest: ${payload.title.cs}`, '#ffd166');
+    } else if (payload.event === 'advanced' && payload.step) {
+      // Po splněném kroku zobraz aktuální cíl, aby hráč věděl co dál
+      // (jinak by se musel dívat do [Q] panelu po každém objective).
+      showToast(this, `Quest: ${payload.step.description.cs}`, '#88dd88');
+    }
+  }
+
+  private handleQuestCompleted(payload: QuestCompleted): void {
+    if (!payload || !this.questPanel) return;
+    this.questPanel.onCompleted(payload);
+    showToast(this, `Quest dokončen: ${payload.title.cs}`, '#88dd88');
+    if (payload.rewards.currency_denar) {
+      showToast(this, `+${payload.rewards.currency_denar} denárů`, '#c8a86a');
+    }
+    if (payload.rewards.knowledge?.length) {
+      for (const k of payload.rewards.knowledge) {
+        showToast(this, `Nové vědomí: ${k}`, '#aabbff');
+      }
+    }
+  }
+
+  private handleQuestObjectClick(objectInstanceId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const pos = this.entities.getQuestObjectPosition(objectInstanceId);
+    if (!pos) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(Math.abs(selfPos.x - pos.x), Math.abs(selfPos.y - pos.y));
+
+    if (cheb <= 2) {
+      this.combat.cancelPendingAttack();
+      this.pendingQuestObjectId = null;
+      this.sendQuestObjectInteract(objectInstanceId);
+      return;
+    }
+
+    this.combat.cancelPendingAttack();
+    this.pendingQuestObjectId = objectInstanceId;
+
+    const cardinalOffsets = [
+      { x: 0, y: -1 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 },
+    ];
+    let best = { x: pos.x, y: pos.y - 1 };
+    let bestDist = Infinity;
+    for (const off of cardinalOffsets) {
+      const tx = pos.x + off.x;
+      const ty = pos.y + off.y;
+      const d = Math.abs(selfPos.x - tx) + Math.abs(selfPos.y - ty);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: tx, y: ty };
+      }
+    }
+
+    const seq = this.nextSeq();
+    const movePayload = JSON.stringify({ target: best, client_seq: seq });
+    this.connRef.socket
+      .sendMatchState(this.matchId, Op.MOVE_REQUEST, movePayload)
+      .catch((err) => console.warn('sendMatchState MOVE_REQUEST (quest object) failed', err));
+  }
+
+  private tickQuestObjectApproach(): void {
+    if (!this.pendingQuestObjectId || !this.connRef || !this.matchId) return;
+    const id = this.pendingQuestObjectId;
+    const pos = this.entities.getQuestObjectPosition(id);
+    if (!pos) {
+      this.pendingQuestObjectId = null;
+      return;
+    }
+    if (this.selfUserId && this.movement.moveStates.has(this.selfUserId)) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(Math.abs(selfPos.x - pos.x), Math.abs(selfPos.y - pos.y));
+    if (cheb <= 2) {
+      const now = this.scene?.systems?.game?.loop?.time ?? performance.now();
+      if (now - this.lastQuestObjectSentAt < 500) return;
+      this.lastQuestObjectSentAt = now;
+      this.pendingQuestObjectId = null;
+      this.sendQuestObjectInteract(id);
+    }
+  }
+
+  private sendQuestObjectInteract(objectInstanceId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    // Okamžitý feedback pro hráče — server progressObjective je tichý pokud
+    // hráč nemá aktivní quest s pasujícím interact_with_object objective. Tento
+    // toast ujistí hráče, že interakce proběhla, i kdyby žádný quest nepostoupil.
+    const name = this.entities.getQuestObjectDisplayName(objectInstanceId) ?? 'objekt';
+    showToast(this, `Prohlížíš si: ${name}`, '#ffd166');
+
+    const payload = JSON.stringify({ object_id: objectInstanceId, action: 'interact' });
+    this.connRef.socket.sendMatchState(this.matchId, Op.INTERACT_OBJECT, payload).catch((err) => {
+      console.warn('sendMatchState INTERACT_OBJECT (quest) failed', err);
+    });
   }
 
   private buildSkillUI(): void {
@@ -1196,12 +1354,14 @@ export class WorldScene extends Phaser.Scene {
     this.dialogPanel?.destroy();
     this.craftingPanel?.destroy();
     this.gatherBar?.destroy();
+    this.questPanel?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
     this.skillPanel = undefined;
     this.dialogPanel = undefined;
     this.craftingPanel = undefined;
     this.gatherBar = undefined;
+    this.questPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;
@@ -1214,6 +1374,8 @@ export class WorldScene extends Phaser.Scene {
     this.lastNpcInteractSentAt = 0;
     this.pendingGatherNodeId = null;
     this.lastGatherSentAt = 0;
+    this.pendingQuestObjectId = null;
+    this.lastQuestObjectSentAt = 0;
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;

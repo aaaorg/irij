@@ -28,6 +28,8 @@ import type {
   LootTable,
   MobDefinition,
   NpcDefinition,
+  PlayerQuestBlob,
+  QuestObjectDefinition,
   ResourceNodeDefinition,
   SkillRow,
 } from 'irij-shared/types';
@@ -131,6 +133,16 @@ export interface GatherSessionState {
   position: Position; // pozice hráče v okamžiku start, pro range re-check
 }
 
+// Phase 11: quest object instance (statický spawn z quest_objects.json,
+// despawnnut po interakci pokud `consume_on_interact: true`).
+export interface QuestObjectInstanceState {
+  instanceId: string;
+  defId: string;
+  position: Position;
+  lastChunk: string;
+  consumed: boolean;
+}
+
 // Per-player aktivní crafting session. Quantity = kolik cyklů ještě zbývá
 // (včetně aktuálního).
 export interface CraftSessionState {
@@ -172,6 +184,14 @@ export interface WorldMatchState {
   craftStationsByChunk: { [chunkKey: string]: { [stationId: string]: true } };
   gatherSessions: { [userId: string]: GatherSessionState };
   craftSessions: { [userId: string]: CraftSessionState };
+  // Phase 11: quest objects + per-player quest blob mirror
+  questObjectDefinitions: { [defId: string]: QuestObjectDefinition };
+  questObjectInstances: { [instanceId: string]: QuestObjectInstanceState };
+  questObjectsByChunk: { [chunkKey: string]: { [instanceId: string]: true } };
+  // Mirror PlayerQuestBlob načtený v matchJoin. Mutace go přes write-through
+  // do PLAYER_QUESTS storage. Per-player versionString cached pro CAS.
+  playerQuestBlobs: { [userId: string]: PlayerQuestBlob };
+  playerQuestVersions: { [userId: string]: string };
 }
 
 export function chunkKeyOf(pos: Position): string {
@@ -393,6 +413,54 @@ export function getNpcsInChunkArea(
     for (const instanceId of Object.keys(bucket)) {
       const npc = state.npcInstances[instanceId];
       if (npc) result.push(npc);
+    }
+  }
+  return result;
+}
+
+// === Quest object chunk index helpers (Phase 11) =============================
+
+export function addQuestObjectToChunk(
+  state: WorldMatchState,
+  instanceId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const bucket = { ...(state.questObjectsByChunk[key] ?? {}) };
+  bucket[instanceId] = true;
+  state.questObjectsByChunk[key] = bucket;
+}
+
+export function removeQuestObjectFromChunk(
+  state: WorldMatchState,
+  instanceId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const existing = state.questObjectsByChunk[key];
+  if (!existing) return;
+  const bucket = { ...existing };
+  delete bucket[instanceId];
+  if (Object.keys(bucket).length === 0) {
+    delete state.questObjectsByChunk[key];
+  } else {
+    state.questObjectsByChunk[key] = bucket;
+  }
+}
+
+export function getQuestObjectsInChunkArea(
+  state: WorldMatchState,
+  fromChunk: string,
+  radius: number = BROADCAST_CHUNK_RADIUS,
+): QuestObjectInstanceState[] {
+  const result: QuestObjectInstanceState[] = [];
+  for (const chunkKey of Object.keys(state.questObjectsByChunk)) {
+    if (chunkDistance(fromChunk, chunkKey) > radius) continue;
+    const bucket = state.questObjectsByChunk[chunkKey];
+    if (!bucket) continue;
+    for (const id of Object.keys(bucket)) {
+      const instance = state.questObjectInstances[id];
+      if (instance && !instance.consumed) result.push(instance);
     }
   }
   return result;
