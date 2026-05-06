@@ -10,6 +10,7 @@ export interface EntityMovementState {
   speedTps: number;
   startedAtMs: number;
   lastTileIdx: number;
+  smoothOffset?: { x: number; y: number };
 }
 
 export class MovementInterpolator {
@@ -27,8 +28,15 @@ export class MovementInterpolator {
     this.moveStates.delete(entityId);
     const sprite = this.resolveSprite(entityId);
     if (sprite) {
-      const px = tileCenterPx(from.x, from.y);
-      sprite.setPosition(px.x, px.y);
+      const fromPx = tileCenterPx(from.x, from.y);
+      if (entityId === this.selfUserId) {
+        const ox = sprite.x - fromPx.x;
+        const oy = sprite.y - fromPx.y;
+        this.applyMovement(entityId, from, path, speedTps,
+          (ox !== 0 || oy !== 0) ? { x: ox, y: oy } : undefined);
+        return;
+      }
+      sprite.setPosition(fromPx.x, fromPx.y);
       sprite.setDepth(depthForDynamic(from.y));
     }
     this.applyMovement(entityId, from, path, speedTps);
@@ -102,9 +110,17 @@ export class MovementInterpolator {
 
       const startPx = tileCenterPx(startTile.x, startTile.y);
       const endPx = tileCenterPx(endTile.x, endTile.y);
-      const x = startPx.x + (endPx.x - startPx.x) * subTile;
-      const y = startPx.y + (endPx.y - startPx.y) * subTile;
+      let x = startPx.x + (endPx.x - startPx.x) * subTile;
+      let y = startPx.y + (endPx.y - startPx.y) * subTile;
       const lerpedY = startTile.y + (endTile.y - startTile.y) * subTile;
+
+      if (mstate.smoothOffset) {
+        const progress = Math.min(1, tilesElapsed);
+        const blend = 1 - progress;
+        x += mstate.smoothOffset.x * blend;
+        y += mstate.smoothOffset.y * blend;
+        if (progress >= 1) mstate.smoothOffset = undefined;
+      }
 
       sprite.setPosition(x, y);
       sprite.setDepth(depthForDynamic(lerpedY));
@@ -126,6 +142,7 @@ export class MovementInterpolator {
     from: Position,
     path: Position[],
     speedTps: number,
+    smoothOffset?: { x: number; y: number },
   ): void {
     this.moveStates.set(entityId, {
       from: { x: from.x, y: from.y },
@@ -133,6 +150,7 @@ export class MovementInterpolator {
       speedTps,
       startedAtMs: Date.now(),
       lastTileIdx: 0,
+      smoothOffset,
     });
     this.entities.tilePositions.set(entityId, { x: from.x, y: from.y });
     if (entityId === this.selfUserId) {

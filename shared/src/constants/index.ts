@@ -104,5 +104,5 @@ export const EQUIPMENT_SLOTS = [
 // v Phase 18 bude mít vlastní spawn point.
 export const DEFAULT_SPAWN_ZONE = 'blatiny';
 export const DEFAULT_SPAWN_POSITION = { x: 25, y: 25 } as const;
-export const DEFAULT_HP = 10;
+export const DEFAULT_HP = 50;
 export const DEFAULT_MANA = 0;
