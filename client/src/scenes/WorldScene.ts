@@ -8,67 +8,47 @@ import type {
   FindOrCreateMatchResponse,
   MoveRejected,
   WorldSnapshot,
-  WorldSnapshotEntity,
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
-import type { Position } from 'irij-shared/types';
 import { DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
 import type { NakamaConnection } from '../nakama.js';
-import { TILE_H_PX, TILE_W_PX, screenToTile, worldToScreen } from '../render/projection.js';
+import { TILE_H_PX, TILE_W_PX, screenToTile, tileCenterPx } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
 import { callRpc } from '../rpc.js';
 import { REGISTRY_KEY_CONNECTION, REGISTRY_KEY_PLAYER, type PlayerProfile } from './LoginScene.js';
+import {
+  EntityManager,
+  CHARACTER_KEY,
+  WOLF_KEY,
+  RAT_KEY,
+  DROP_KEY,
+  FRAME_FACING_SE,
+} from '../world/EntityManager.js';
+import { MovementInterpolator } from '../world/MovementInterpolator.js';
+import { CombatController } from '../world/CombatController.js';
+import { HpBarManager } from '../world/HpBarManager.js';
+import { MoveRejectedToast, showFloatingText, showToast } from '../world/FloatingText.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
 const TILESET_NAME = 'placeholder';
 const TERRAIN_LAYER_NAME = 'terrain';
-const CHARACTER_KEY = 'characterPlaceholder';
-const WOLF_KEY = 'mobWolf';
-const RAT_KEY = 'mobRat';
-const DROP_KEY = 'dropPlaceholder';
-
-const FRAME_FACING_SE = 0;
 
 const HUD_GUARD_W = 200;
 const HUD_GUARD_H = 30;
-
-const MOB_TEXTURE_MAP: Record<string, string> = {
-  'mob.wolf': WOLF_KEY,
-  'mob.giant_rat': RAT_KEY,
-};
-
-interface EntityMovementState {
-  from: Position;
-  path: Position[];
-  speedTps: number;
-  startedAtMs: number;
-  lastTileIdx: number;
-}
-
-interface HpBarState {
-  bg: Phaser.GameObjects.Rectangle;
-  fg: Phaser.GameObjects.Rectangle;
-  hpPct: number;
-}
 
 export class WorldScene extends Phaser.Scene {
   private player?: Phaser.GameObjects.Sprite;
   private matchId?: string;
   private connRef?: NakamaConnection;
   private selfUserId?: string;
-  private otherPlayers: Map<string, Phaser.GameObjects.Sprite> = new Map();
-  private mobSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
-  private dropSprites: Map<string, Phaser.GameObjects.Sprite> = new Map();
-  private entityMoveStates: Map<string, EntityMovementState> = new Map();
-  private hpBars: Map<string, HpBarState> = new Map();
-  private entityTilePositions: Map<string, Position> = new Map();
   private clientSeq = 0;
-  private rejectToast?: Phaser.GameObjects.Text;
-  private pendingAttackTarget: string | null = null;
-  private lastAttackRequestSentAt = 0;
-  private lastApproachSentAt = 0;
-  private selfTilePosition: Position = { x: 25, y: 25 };
+
+  private entities!: EntityManager;
+  private movement!: MovementInterpolator;
+  private combat!: CombatController;
+  private hpBars!: HpBarManager;
+  private rejectToast!: MoveRejectedToast;
 
   constructor() {
     super('WorldScene');
@@ -102,12 +82,24 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
+    this.connRef = conn;
+    const userId = conn.session.user_id!;
+    this.selfUserId = userId;
+
     this.buildTilemap();
     this.spawnPlayer(profile);
     this.buildHud(profile);
 
-    this.connRef = conn;
-    this.selfUserId = conn.session.user_id;
+    this.entities = new EntityManager(this, userId);
+    this.hpBars = new HpBarManager(this);
+    this.movement = new MovementInterpolator(
+      this.entities,
+      userId,
+      (id) => this.resolveSprite(id),
+    );
+    this.movement.selfTilePosition = { ...profile.player_state.current_position };
+    this.combat = new CombatController(this, this.entities, this.movement, userId);
+    this.rejectToast = new MoveRejectedToast(this);
 
     conn.socket.ondisconnect = (evt) => {
       console.warn('Nakama socket disconnected', evt);
@@ -122,6 +114,18 @@ export class WorldScene extends Phaser.Scene {
       console.error('joinWorldMatch failed', err);
     });
   }
+
+  private resolveSprite(entityId: string): Phaser.GameObjects.Sprite | undefined {
+    if (entityId === this.selfUserId) return this.player;
+    return this.entities.getSprite(entityId);
+  }
+
+  private nextSeq(): number {
+    this.clientSeq += 1;
+    return this.clientSeq;
+  }
+
+  // === Match join ========================================================
 
   private async joinWorldMatch(conn: NakamaConnection): Promise<void> {
     const response = await callRpc<Record<string, never>, FindOrCreateMatchResponse>(
@@ -191,39 +195,39 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  // === Match data handlers ============================================
+  // === Match data handlers ===============================================
 
   private handleWorldSnapshot(snapshot: WorldSnapshot): void {
     if (!snapshot || !Array.isArray(snapshot.entities)) return;
 
-    // Clean up stale remote players before processing snapshot (prevents duplicate sprites
-    // when Playwright smoke test or rapid reconnect produces overlapping sessions)
-    for (const [id, sprite] of this.otherPlayers) {
-      this.entityMoveStates.delete(id);
-      this.removeHpBar(id);
-      this.entityTilePositions.delete(id);
-      sprite.destroy();
+    for (const id of this.entities.otherPlayers.keys()) {
+      this.movement.removeEntity(id);
+      this.hpBars.remove(id);
     }
-    this.otherPlayers.clear();
+    this.entities.clearRemotePlayers();
 
     for (const entity of snapshot.entities) {
       if (entity.type === 'player') {
-        this.spawnRemotePlayerIfNeeded(entity);
+        this.entities.spawnRemotePlayer(entity);
         if (
           entity.id !== this.selfUserId &&
           entity.path &&
           entity.path.length > 0 &&
           entity.speed_tps !== undefined
         ) {
-          this.startEntityMovement(entity.id, entity.position, entity.path, entity.speed_tps);
+          this.movement.startMovement(entity.id, entity.position, entity.path, entity.speed_tps);
         }
       } else if (entity.type === 'mob') {
-        this.spawnMobIfNeeded(entity);
+        const hpPct = this.entities.spawnMob(entity);
+        if (hpPct < 1) {
+          const sprite = this.entities.mobSprites.get(entity.id);
+          if (sprite) this.hpBars.create(entity.id, sprite, hpPct);
+        }
         if (entity.path && entity.path.length > 0 && entity.speed_tps !== undefined) {
-          this.startEntityMovement(entity.id, entity.position, entity.path, entity.speed_tps);
+          this.movement.startMovement(entity.id, entity.position, entity.path, entity.speed_tps);
         }
       } else if (entity.type === 'drop') {
-        this.spawnDropIfNeeded(entity);
+        this.entities.spawnDrop(entity);
       }
     }
   }
@@ -232,7 +236,7 @@ export class WorldScene extends Phaser.Scene {
     if (!payload?.entity_id) return;
     if (payload.type === 'player') {
       if (payload.entity_id === this.selfUserId) return;
-      this.spawnRemotePlayerIfNeeded({
+      this.entities.spawnRemotePlayer({
         id: payload.entity_id,
         type: 'player',
         position: payload.position,
@@ -240,7 +244,7 @@ export class WorldScene extends Phaser.Scene {
         hp_pct: payload.hp_pct,
       });
     } else if (payload.type === 'mob') {
-      this.spawnMobIfNeeded({
+      const hpPct = this.entities.spawnMob({
         id: payload.entity_id,
         type: 'mob',
         position: payload.position,
@@ -249,8 +253,12 @@ export class WorldScene extends Phaser.Scene {
         level: payload.level,
         hp_pct: payload.hp_pct,
       });
+      if (hpPct < 1) {
+        const sprite = this.entities.mobSprites.get(payload.entity_id);
+        if (sprite) this.hpBars.create(payload.entity_id, sprite, hpPct);
+      }
     } else if (payload.type === 'drop') {
-      this.spawnDropIfNeeded({
+      this.entities.spawnDrop({
         id: payload.entity_id,
         type: 'drop',
         position: payload.position,
@@ -263,44 +271,18 @@ export class WorldScene extends Phaser.Scene {
     if (!payload?.entity_id) return;
     const entityId = payload.entity_id;
 
-    // Player
-    const playerSprite = this.otherPlayers.get(entityId);
-    if (playerSprite) {
-      this.entityMoveStates.delete(entityId);
-      this.tweens.killTweensOf(playerSprite);
-      playerSprite.destroy();
-      this.otherPlayers.delete(entityId);
-      this.removeHpBar(entityId);
-      this.entityTilePositions.delete(entityId);
-      return;
-    }
-
-    // Mob
-    const mobSprite = this.mobSprites.get(entityId);
-    if (mobSprite) {
-      this.entityMoveStates.delete(entityId);
-      this.tweens.killTweensOf(mobSprite);
-      mobSprite.destroy();
-      this.mobSprites.delete(entityId);
-      this.removeHpBar(entityId);
-      this.entityTilePositions.delete(entityId);
-      return;
-    }
-
-    // Drop
-    const dropSprite = this.dropSprites.get(entityId);
-    if (dropSprite) {
-      dropSprite.destroy();
-      this.dropSprites.delete(entityId);
-    }
+    const sprite = this.entities.getSprite(entityId);
+    if (sprite) this.tweens.killTweensOf(sprite);
+    this.movement.removeEntity(entityId);
+    this.hpBars.remove(entityId);
+    this.entities.despawnEntity(entityId);
   }
 
   private handleEntityMoved(payload: EntityMoved): void {
     if (!payload?.entity_id || !payload.from) return;
 
-    // Position correction / stop (empty path) — snap entity to server position
     if (!Array.isArray(payload.path) || payload.path.length === 0) {
-      this.snapEntityToServerPosition(payload.entity_id, payload.from);
+      this.movement.snapToPosition(payload.entity_id, payload.from);
       return;
     }
 
@@ -309,35 +291,22 @@ export class WorldScene extends Phaser.Scene {
     const hasSprite =
       payload.entity_id === this.selfUserId
         ? !!this.player
-        : this.otherPlayers.has(payload.entity_id) || this.mobSprites.has(payload.entity_id);
+        : this.entities.otherPlayers.has(payload.entity_id) ||
+          this.entities.mobSprites.has(payload.entity_id);
     if (!hasSprite) {
       console.warn(`[match ENTITY_MOVED] sprite not found for ${payload.entity_id.slice(0, 8)}`);
       return;
     }
 
-    this.startEntityMovement(payload.entity_id, payload.from, payload.path, payload.speed_tps);
-  }
-
-  private snapEntityToServerPosition(entityId: string, pos: Position): void {
-    this.entityMoveStates.delete(entityId);
-    this.entityTilePositions.set(entityId, { x: pos.x, y: pos.y });
-    if (entityId === this.selfUserId) {
-      this.selfTilePosition = { x: pos.x, y: pos.y };
-    }
-    const sprite = this.getSpriteForEntity(entityId);
-    if (sprite) {
-      const px = this.tileCenterPx(pos);
-      sprite.setPosition(px.x, px.y);
-      sprite.setDepth(depthForDynamic(pos.y));
-    }
+    this.movement.startMovement(payload.entity_id, payload.from, payload.path, payload.speed_tps);
   }
 
   private handleCombatResolved(payload: CombatResolved): void {
     if (!payload) return;
 
     const targetSprite =
-      this.mobSprites.get(payload.target_id) ??
-      this.otherPlayers.get(payload.target_id) ??
+      this.entities.mobSprites.get(payload.target_id) ??
+      this.entities.otherPlayers.get(payload.target_id) ??
       (payload.target_id === this.selfUserId ? this.player : undefined);
 
     if (targetSprite) {
@@ -348,23 +317,21 @@ export class WorldScene extends Phaser.Scene {
       if (payload.hit_type === 'miss') color = '#888888';
 
       const text = payload.hit_type === 'miss' ? 'Miss' : String(payload.damage);
-      this.showFloatingText(targetSprite.x, targetSprite.y - 20, text, color);
+      showFloatingText(this, targetSprite.x, targetSprite.y - 20, text, color);
     }
 
-    // Update HP bar
-    const mob = this.mobSprites.get(payload.target_id);
+    const mob = this.entities.mobSprites.get(payload.target_id);
     if (mob) {
       const def = mob.getData('hpMax') as number | undefined;
       if (def && def > 0) {
-        this.updateHpBar(payload.target_id, payload.remaining_hp / def);
+        this.hpBars.update(payload.target_id, payload.remaining_hp / def, () => mob);
       }
     }
 
-    // Self HP update
     if (payload.target_id === this.selfUserId && this.player) {
-      const hpMax = this.player.getData('hpMax') as number ?? 10;
+      const hpMax = (this.player.getData('hpMax') as number) ?? 10;
       if (hpMax > 0) {
-        this.updateHpBar('self', payload.remaining_hp / hpMax);
+        this.hpBars.update('self', payload.remaining_hp / hpMax, () => this.player);
       }
     }
   }
@@ -377,11 +344,11 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    const mobSprite = this.mobSprites.get(payload.entity_id);
+    const mobSprite = this.entities.mobSprites.get(payload.entity_id);
     if (mobSprite) {
-      this.entityMoveStates.delete(payload.entity_id);
-      this.removeHpBar(payload.entity_id);
-      this.entityTilePositions.delete(payload.entity_id);
+      this.movement.removeEntity(payload.entity_id);
+      this.hpBars.remove(payload.entity_id);
+      this.entities.tilePositions.delete(payload.entity_id);
       this.tweens.add({
         targets: mobSprite,
         alpha: 0,
@@ -389,448 +356,75 @@ export class WorldScene extends Phaser.Scene {
         ease: 'Linear',
         onComplete: () => {
           mobSprite.destroy();
-          this.mobSprites.delete(payload.entity_id);
+          this.entities.mobSprites.delete(payload.entity_id);
         },
       });
     }
 
-    const playerSprite = this.otherPlayers.get(payload.entity_id);
+    const playerSprite = this.entities.otherPlayers.get(payload.entity_id);
     if (playerSprite) {
-      this.entityMoveStates.delete(payload.entity_id);
-      this.removeHpBar(payload.entity_id);
-      this.entityTilePositions.delete(payload.entity_id);
+      this.movement.removeEntity(payload.entity_id);
+      this.hpBars.remove(payload.entity_id);
+      this.entities.tilePositions.delete(payload.entity_id);
       this.tweens.killTweensOf(playerSprite);
       playerSprite.destroy();
-      this.otherPlayers.delete(payload.entity_id);
+      this.entities.otherPlayers.delete(payload.entity_id);
     }
 
     if (payload.killer_id === this.selfUserId && payload.xp_awarded.length > 0) {
       const xpText = payload.xp_awarded
         .map((a) => `+${a.amount} ${a.skill}`)
         .join(', ');
-      this.showToast(`XP: ${xpText}`, '#44ff44');
+      showToast(this, `XP: ${xpText}`, '#44ff44');
     }
   }
 
   private handleSelfDeath(): void {
-    this.entityMoveStates.delete(this.selfUserId!);
-    this.pendingAttackTarget = null;
-    this.removeHpBar('self');
+    this.movement.removeEntity(this.selfUserId!);
+    this.combat.cancelPendingAttack();
+    this.hpBars.remove('self');
 
     const spawnPos = DEFAULT_SPAWN_POSITION;
-    this.selfTilePosition = { x: spawnPos.x, y: spawnPos.y };
-    this.entityTilePositions.set(this.selfUserId!, { x: spawnPos.x, y: spawnPos.y });
+    this.movement.selfTilePosition = { x: spawnPos.x, y: spawnPos.y };
+    this.entities.tilePositions.set(this.selfUserId!, { x: spawnPos.x, y: spawnPos.y });
 
     if (this.player) {
-      const px = this.tileCenterPx(spawnPos);
+      const px = tileCenterPx(spawnPos.x, spawnPos.y);
       this.player.setPosition(px.x, px.y);
       this.player.setDepth(depthForDynamic(spawnPos.y));
-      this.player.setData('hpCurrent', this.player.getData('hpMax') as number ?? 10);
+      this.player.setData('hpCurrent', (this.player.getData('hpMax') as number) ?? 10);
     }
 
-    this.showToast('Zemřel jsi!', '#ff4444');
+    showToast(this, 'Zemřel jsi!', '#ff4444');
   }
 
   private handleMoveRejected(payload: MoveRejected): void {
     if (!payload) return;
     console.warn(`[match MOVE_REJECTED] reason=${payload.reason} client_seq=${payload.client_seq}`);
     if (payload.reason === 'rate_limited') return;
-    this.showMoveRejectedToast(payload.reason);
+    this.rejectToast.show(payload.reason);
   }
 
-  // === Movement ======================================================
-
-  private startEntityMovement(
-    entityId: string,
-    from: Position,
-    path: Position[],
-    speedTps: number,
-  ): void {
-    if (path.length === 0) return;
-
-    // Always apply immediately — snap to server-authoritative position.
-    // Previous "pending queue" approach caused visual desync because the
-    // client kept animating stale paths while server positions diverged.
-    this.entityMoveStates.delete(entityId);
-    const sprite = this.getSpriteForEntity(entityId);
-    if (sprite) {
-      const px = this.tileCenterPx(from);
-      sprite.setPosition(px.x, px.y);
-      sprite.setDepth(depthForDynamic(from.y));
-    }
-    this.applyMovement(entityId, from, path, speedTps);
-  }
-
-  private applyMovement(
-    entityId: string,
-    from: Position,
-    path: Position[],
-    speedTps: number,
-  ): void {
-    this.entityMoveStates.set(entityId, {
-      from: { x: from.x, y: from.y },
-      path: path.map((p) => ({ x: p.x, y: p.y })),
-      speedTps,
-      startedAtMs: Date.now(),
-      lastTileIdx: 0,
-    });
-    this.entityTilePositions.set(entityId, { x: from.x, y: from.y });
-    if (entityId === this.selfUserId) {
-      this.selfTilePosition = { x: from.x, y: from.y };
-    }
-  }
+  // === Game loop =========================================================
 
   override update(_time: number, _delta: number): void {
-    if (this.entityMoveStates.size === 0 && this.hpBars.size === 0) return;
-    const now = Date.now();
-    const completed: string[] = [];
+    if (this.movement.moveStates.size === 0 && this.hpBars.size === 0) return;
 
-    for (const [entityId, mstate] of this.entityMoveStates) {
-      const sprite = this.getSpriteForEntity(entityId);
-      if (!sprite) {
-        completed.push(entityId);
-        continue;
-      }
-
-      const elapsedMs = now - mstate.startedAtMs;
-      const tilesElapsed = (elapsedMs * mstate.speedTps) / 1000;
-      const idx = Math.floor(Math.max(0, tilesElapsed));
-
-      // Tile boundary crossed — update tracked tile position
-      if (idx > mstate.lastTileIdx) {
-        const arrivedTile = mstate.path[idx - 1] ?? mstate.from;
-        this.entityTilePositions.set(entityId, { x: arrivedTile.x, y: arrivedTile.y });
-        if (entityId === this.selfUserId) {
-          this.selfTilePosition = { x: arrivedTile.x, y: arrivedTile.y };
-        }
-        mstate.lastTileIdx = idx;
-      }
-
-      if (tilesElapsed >= mstate.path.length) {
-        const last = mstate.path[mstate.path.length - 1];
-        if (last) {
-          const px = this.tileCenterPx(last);
-          sprite.setPosition(px.x, px.y);
-          sprite.setDepth(depthForDynamic(last.y));
-          this.entityTilePositions.set(entityId, { x: last.x, y: last.y });
-          if (entityId === this.selfUserId) {
-            this.selfTilePosition = { x: last.x, y: last.y };
-          }
-        }
-        completed.push(entityId);
-        continue;
-      }
-
-      const subTile = tilesElapsed - idx;
-      const startTile = idx === 0 ? mstate.from : (mstate.path[idx - 1] ?? mstate.from);
-      const endTile = mstate.path[idx];
-      if (!endTile) {
-        completed.push(entityId);
-        continue;
-      }
-
-      const startPx = this.tileCenterPx(startTile);
-      const endPx = this.tileCenterPx(endTile);
-      const x = startPx.x + (endPx.x - startPx.x) * subTile;
-      const y = startPx.y + (endPx.y - startPx.y) * subTile;
-      const lerpedY = startTile.y + (endTile.y - startTile.y) * subTile;
-
-      sprite.setPosition(x, y);
-      sprite.setDepth(depthForDynamic(lerpedY));
-    }
-
+    const completed = this.movement.update();
     for (const id of completed) {
-      this.entityMoveStates.delete(id);
       if (id === this.selfUserId) {
-        this.checkPendingAttack();
+        this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
       }
     }
 
-    this.updateAllHpBarPositions();
+    this.hpBars.updateAllPositions((id) => this.resolveSprite(id));
 
-    if (this.pendingAttackTarget) {
-      this.checkPendingAttack();
+    if (this.combat.pendingAttackTarget) {
+      this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
     }
   }
 
-  private checkPendingAttack(): void {
-    if (!this.pendingAttackTarget || !this.connRef || !this.matchId) return;
-
-    const targetId = this.pendingAttackTarget;
-    const mobSprite = this.mobSprites.get(targetId);
-    if (!mobSprite || !mobSprite.active || mobSprite.alpha <= 0) {
-      this.pendingAttackTarget = null;
-      return;
-    }
-
-    const mobPos = this.entityTilePositions.get(targetId);
-    if (!mobPos) {
-      this.pendingAttackTarget = null;
-      return;
-    }
-
-    const manhattanDist =
-      Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y);
-    const now = this.time.now;
-
-    if (manhattanDist === 1) {
-      if (now - this.lastAttackRequestSentAt < 550) return;
-      this.lastAttackRequestSentAt = now;
-      this.clientSeq += 1;
-      const payload = JSON.stringify({
-        target_id: targetId,
-        client_seq: this.clientSeq,
-      });
-      this.connRef.socket
-        .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
-        .catch((err) => {
-          console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
-        });
-      return;
-    }
-
-    // If mob is already pathing toward us, stand still and let it come
-    if (this.isMobApproachingUs(targetId)) return;
-
-    if (now - this.lastApproachSentAt < 500) return;
-
-    if (this.selfUserId && this.entityMoveStates.has(this.selfUserId)) {
-      const moveState = this.entityMoveStates.get(this.selfUserId);
-      if (moveState && moveState.path.length > 0) {
-        const pathEnd = moveState.path[moveState.path.length - 1]!;
-        const endToMob =
-          Math.abs(pathEnd.x - mobPos.x) + Math.abs(pathEnd.y - mobPos.y);
-        if (endToMob > 1) {
-          this.sendApproachRequest(mobPos, now);
-        }
-      }
-    } else {
-      this.sendApproachRequest(mobPos, now);
-    }
-  }
-
-  private isMobApproachingUs(mobId: string): boolean {
-    const mobMoveState = this.entityMoveStates.get(mobId);
-    if (!mobMoveState || mobMoveState.path.length === 0) return false;
-    const mobPathEnd = mobMoveState.path[mobMoveState.path.length - 1]!;
-    const endToPlayer =
-      Math.abs(mobPathEnd.x - this.selfTilePosition.x) +
-      Math.abs(mobPathEnd.y - this.selfTilePosition.y);
-    return endToPlayer <= 1;
-  }
-
-  private sendApproachRequest(mobPos: Position, now: number): void {
-    if (!this.connRef || !this.matchId) return;
-    this.lastApproachSentAt = now;
-    const approachTile = this.findBestAdjacentTile(mobPos);
-    this.clientSeq += 1;
-    const payload = JSON.stringify({
-      target: approachTile,
-      client_seq: this.clientSeq,
-    });
-    this.connRef.socket
-      .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
-      .catch((err) => {
-        console.warn(`sendMatchState MOVE_REQUEST (re-approach) failed`, err);
-      });
-  }
-
-  private getSpriteForEntity(entityId: string): Phaser.GameObjects.Sprite | undefined {
-    if (entityId === this.selfUserId) return this.player;
-    return this.otherPlayers.get(entityId) ?? this.mobSprites.get(entityId);
-  }
-
-  private tileCenterPx(tile: Position): { x: number; y: number } {
-    const { sx, sy } = worldToScreen(tile.x, tile.y);
-    return { x: sx + TILE_W_PX / 2, y: sy + TILE_H_PX / 2 };
-  }
-
-  // === Sprite helpers =================================================
-
-  private spawnRemotePlayerIfNeeded(entity: WorldSnapshotEntity): void {
-    if (!entity?.id) return;
-    if (entity.type !== 'player') return;
-    if (entity.id === this.selfUserId) return;
-    if (this.otherPlayers.has(entity.id)) return;
-
-    const { x, y } = entity.position;
-    const center = this.tileCenterPx({ x, y });
-
-    const sprite = this.add
-      .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
-      .setOrigin(0.5, 1)
-      .setDepth(depthForDynamic(y));
-    if (entity.display_name) sprite.setData('displayName', entity.display_name);
-    this.otherPlayers.set(entity.id, sprite);
-    this.entityTilePositions.set(entity.id, { x, y });
-  }
-
-  private spawnMobIfNeeded(entity: WorldSnapshotEntity): void {
-    if (!entity?.id) return;
-    if (this.mobSprites.has(entity.id)) return;
-
-    const { x, y } = entity.position;
-    const center = this.tileCenterPx({ x, y });
-    const textureKey = MOB_TEXTURE_MAP[entity.mob_id ?? ''] ?? WOLF_KEY;
-
-    const sprite = this.add
-      .sprite(center.x, center.y, textureKey, FRAME_FACING_SE)
-      .setOrigin(0.5, 1)
-      .setDepth(depthForDynamic(y));
-
-    if (entity.display_name_cs) sprite.setData('displayName', entity.display_name_cs);
-    if (entity.level !== undefined) sprite.setData('level', entity.level);
-    const hpPct = entity.hp_pct ?? 1;
-
-    // Store hp_max for later updates. We infer from mob_id.
-    const hpMaxMap: Record<string, number> = { 'mob.wolf': 30, 'mob.giant_rat': 15 };
-    sprite.setData('hpMax', hpMaxMap[entity.mob_id ?? ''] ?? 30);
-
-    this.mobSprites.set(entity.id, sprite);
-    this.entityTilePositions.set(entity.id, { x, y });
-
-    if (hpPct < 1) {
-      this.createHpBar(entity.id, sprite, hpPct);
-    }
-  }
-
-  private spawnDropIfNeeded(entity: WorldSnapshotEntity): void {
-    if (!entity?.id) return;
-    if (this.dropSprites.has(entity.id)) return;
-
-    const { x, y } = entity.position;
-    const center = this.tileCenterPx({ x, y });
-
-    const sprite = this.add
-      .sprite(center.x, center.y, DROP_KEY)
-      .setOrigin(0.5, 0.5)
-      .setDepth(depthForDynamic(y) - 1);
-
-    this.dropSprites.set(entity.id, sprite);
-  }
-
-  // === HP Bar =========================================================
-
-  private createHpBar(entityId: string, sprite: Phaser.GameObjects.Sprite, hpPct: number): void {
-    const barW = 28;
-    const barH = 4;
-    const clamped = Math.max(0, Math.min(1, hpPct));
-    const barY = sprite.y - sprite.displayHeight - 4;
-    const bg = this.add
-      .rectangle(sprite.x - barW / 2, barY, barW, barH, 0x440000)
-      .setOrigin(0, 0)
-      .setDepth(sprite.depth + 1);
-    const fg = this.add
-      .rectangle(sprite.x - barW / 2, barY, barW * clamped, barH, 0x00cc00)
-      .setOrigin(0, 0)
-      .setDepth(sprite.depth + 2);
-
-    this.hpBars.set(entityId, { bg, fg, hpPct: clamped });
-  }
-
-  private updateHpBar(entityId: string, hpPct: number): void {
-    const clamped = Math.max(0, Math.min(1, hpPct));
-    const existing = this.hpBars.get(entityId);
-    if (existing) {
-      existing.hpPct = clamped;
-      existing.fg.width = 28 * clamped;
-      if (hpPct < 0.3) {
-        existing.fg.fillColor = 0xcc0000;
-      } else if (hpPct < 0.6) {
-        existing.fg.fillColor = 0xcccc00;
-      } else {
-        existing.fg.fillColor = 0x00cc00;
-      }
-    } else {
-      let sprite: Phaser.GameObjects.Sprite | undefined;
-      if (entityId === 'self') {
-        sprite = this.player;
-      } else {
-        sprite = this.mobSprites.get(entityId) ?? this.otherPlayers.get(entityId);
-      }
-      if (sprite) {
-        this.createHpBar(entityId === 'self' ? 'self' : entityId, sprite, hpPct);
-      }
-    }
-  }
-
-  private removeHpBar(entityId: string): void {
-    const bar = this.hpBars.get(entityId);
-    if (bar) {
-      bar.bg.destroy();
-      bar.fg.destroy();
-      this.hpBars.delete(entityId);
-    }
-  }
-
-  private updateAllHpBarPositions(): void {
-    for (const [entityId, bar] of this.hpBars) {
-      let sprite: Phaser.GameObjects.Sprite | undefined;
-      if (entityId === 'self') {
-        sprite = this.player;
-      } else {
-        sprite = this.mobSprites.get(entityId) ?? this.otherPlayers.get(entityId);
-      }
-      if (!sprite || !sprite.active) {
-        this.removeHpBar(entityId);
-        continue;
-      }
-      const barW = 28;
-      const barY = sprite.y - sprite.displayHeight - 4;
-      bar.bg.setPosition(sprite.x - barW / 2, barY);
-      bar.fg.setPosition(sprite.x - barW / 2, barY);
-      bar.bg.setDepth(sprite.depth + 1);
-      bar.fg.setDepth(sprite.depth + 2);
-    }
-  }
-
-  // === Floating text ==================================================
-
-  private showFloatingText(x: number, y: number, text: string, color: string): void {
-    const floatText = this.add
-      .text(x, y, text, {
-        fontSize: '14px',
-        fontStyle: 'bold',
-        color,
-        stroke: '#000000',
-        strokeThickness: 2,
-      })
-      .setOrigin(0.5, 1)
-      .setDepth(100_001);
-
-    this.tweens.add({
-      targets: floatText,
-      y: y - 30,
-      alpha: 0,
-      duration: 800,
-      ease: 'Linear',
-      onComplete: () => floatText.destroy(),
-    });
-  }
-
-  private showToast(message: string, color: string): void {
-    const cx = this.scale.width / 2;
-    const toast = this.add
-      .text(cx, 90, message, {
-        fontSize: '16px',
-        color,
-        backgroundColor: '#00000080',
-        padding: { x: 8, y: 4 },
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(100_001);
-
-    this.tweens.add({
-      targets: toast,
-      alpha: 0,
-      duration: 2000,
-      ease: 'Linear',
-      onComplete: () => toast.destroy(),
-    });
-  }
-
-  // === Click-to-move / click-to-attack ================================
+  // === Input =============================================================
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {
     if (pointer.x < HUD_GUARD_W && pointer.y < HUD_GUARD_H) return;
@@ -839,125 +433,25 @@ export class WorldScene extends Phaser.Scene {
     const tile = screenToTile(pointer.worldX, pointer.worldY);
     if (!Number.isFinite(tile.x) || !Number.isFinite(tile.y)) return;
 
-    // Check if clicking on or near a mob
-    const targetMobId = this.findMobAtTile(tile.x, tile.y);
+    const targetMobId = this.combat.findMobAtTile(tile.x, tile.y);
     if (targetMobId) {
-      const mobPos = this.entityTilePositions.get(targetMobId);
-      const manhattanDist = mobPos
-        ? Math.abs(this.selfTilePosition.x - mobPos.x) + Math.abs(this.selfTilePosition.y - mobPos.y)
-        : Infinity;
-
-      if (manhattanDist === 1) {
-        // In range (adjacent) — attack immediately, keep target for continuous combat
-        this.pendingAttackTarget = targetMobId;
-        this.lastAttackRequestSentAt = this.time.now;
-        this.clientSeq += 1;
-        const payload = JSON.stringify({
-          target_id: targetMobId,
-          client_seq: this.clientSeq,
-        });
-        this.connRef.socket
-          .sendMatchState(this.matchId, Op.ATTACK_REQUEST, payload)
-          .catch((err) => {
-            console.warn(`sendMatchState ATTACK_REQUEST failed`, err);
-          });
-      } else if (mobPos) {
-        // Out of range — set target; approach only if mob isn't already coming to us
-        this.pendingAttackTarget = targetMobId;
-        if (!this.isMobApproachingUs(targetMobId)) {
-          this.lastApproachSentAt = this.time.now;
-          const approachTile = this.findBestAdjacentTile(mobPos);
-          this.clientSeq += 1;
-          const payload = JSON.stringify({
-            target: approachTile,
-            client_seq: this.clientSeq,
-          });
-          this.connRef.socket
-            .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
-            .catch((err) => {
-              console.warn(`sendMatchState MOVE_REQUEST (approach) failed`, err);
-            });
-        }
-      }
+      this.combat.handleMobClick(targetMobId, this.connRef, this.matchId, () => this.nextSeq());
       return;
     }
 
-    // Default: move request (cancel pending attack)
-    this.pendingAttackTarget = null;
-    this.clientSeq += 1;
-    const matchId = this.matchId;
-    const conn = this.connRef;
-    const seq = this.clientSeq;
+    this.combat.cancelPendingAttack();
+    const seq = this.nextSeq();
     const payload = JSON.stringify({
       target: { x: tile.x, y: tile.y },
       client_seq: seq,
     });
 
-    conn.socket.sendMatchState(matchId, Op.MOVE_REQUEST, payload).catch((err) => {
+    this.connRef.socket.sendMatchState(this.matchId, Op.MOVE_REQUEST, payload).catch((err) => {
       console.warn(`sendMatchState MOVE_REQUEST seq=${seq} failed`, err);
     });
   }
 
-  private findBestAdjacentTile(mobPos: Position): Position {
-    const cardinalOffsets = [
-      { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 },
-    ];
-    let best = { x: mobPos.x, y: mobPos.y - 1 };
-    let bestDist = Infinity;
-    for (const off of cardinalOffsets) {
-      const tx = mobPos.x + off.x;
-      const ty = mobPos.y + off.y;
-      const dist = Math.abs(this.selfTilePosition.x - tx) + Math.abs(this.selfTilePosition.y - ty);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = { x: tx, y: ty };
-      }
-    }
-    return best;
-  }
-
-  private findMobAtTile(tileX: number, tileY: number): string | null {
-    for (const [entityId, pos] of this.entityTilePositions) {
-      if (!this.mobSprites.has(entityId)) continue;
-      if (pos.x === tileX && pos.y === tileY) {
-        const sprite = this.mobSprites.get(entityId);
-        if (sprite && sprite.active && sprite.alpha > 0) return entityId;
-      }
-    }
-    return null;
-  }
-
-  private showMoveRejectedToast(reason: string): void {
-    if (this.rejectToast) {
-      this.tweens.killTweensOf(this.rejectToast);
-      this.rejectToast.destroy();
-      this.rejectToast = undefined;
-    }
-    const cx = this.scale.width / 2;
-    const toast = this.add
-      .text(cx, 60, `Tam se nedostaneš (${reason})`, {
-        fontSize: '16px',
-        color: '#e25c5c',
-        backgroundColor: '#00000080',
-        padding: { x: 8, y: 4 },
-      })
-      .setOrigin(0.5, 0)
-      .setScrollFactor(0)
-      .setDepth(100_001);
-    this.rejectToast = toast;
-    this.tweens.add({
-      targets: toast,
-      alpha: 0,
-      duration: 1500,
-      ease: 'Linear',
-      onComplete: () => {
-        toast.destroy();
-        if (this.rejectToast === toast) this.rejectToast = undefined;
-      },
-    });
-  }
-
-  // === Setup helpers ==================================================
+  // === Setup =============================================================
 
   private buildTilemap(): void {
     const map = this.make.tilemap({ key: MAP_KEY });
@@ -982,13 +476,12 @@ export class WorldScene extends Phaser.Scene {
 
   private spawnPlayer(profile: PlayerProfile): void {
     const { x, y } = profile.player_state.current_position;
-    const center = this.tileCenterPx({ x, y });
+    const center = tileCenterPx(x, y);
     this.player = this.add
       .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
       .setOrigin(0.5, 1)
       .setDepth(depthForDynamic(y));
     this.player.setData('hpMax', profile.player_state.hp_max ?? 10);
-    this.selfTilePosition = { x, y };
 
     this.cameras.main.startFollow(this.player, true, 0.15, 0.15);
   }
@@ -1016,29 +509,15 @@ export class WorldScene extends Phaser.Scene {
     this.input.off('pointerdown', this.handlePointerDown, this);
 
     this.tweens.killAll();
-    this.entityMoveStates.clear();
-    for (const sprite of this.otherPlayers.values()) sprite.destroy();
-    this.otherPlayers.clear();
-    for (const sprite of this.mobSprites.values()) sprite.destroy();
-    this.mobSprites.clear();
-    for (const sprite of this.dropSprites.values()) sprite.destroy();
-    this.dropSprites.clear();
-    for (const bar of this.hpBars.values()) {
-      bar.bg.destroy();
-      bar.fg.destroy();
-    }
-    this.hpBars.clear();
-    this.entityTilePositions.clear();
-
-    if (this.rejectToast) {
-      this.rejectToast.destroy();
-      this.rejectToast = undefined;
-    }
+    this.movement.destroy();
+    this.entities.destroy();
+    this.hpBars.destroy();
+    this.combat.destroy();
+    this.rejectToast.destroy();
 
     this.player = undefined;
     this.selfUserId = undefined;
     this.clientSeq = 0;
-    this.pendingAttackTarget = null;
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;

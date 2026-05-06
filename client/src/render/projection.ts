@@ -53,6 +53,11 @@ export function screenToWorld(sx: number, sy: number): WorldTile {
 //
 // Vstup je relativní k anchor tile (0,0) — odeber camera/origin offset před voláním
 // (např. Phaser pointer.worldX/worldY, ne raw canvas pixels).
+export function tileCenterPx(tileX: number, tileY: number): { x: number; y: number } {
+  const { sx, sy } = worldToScreen(tileX, tileY);
+  return { x: sx + TILE_W_PX / 2, y: sy + TILE_H_PX / 2 };
+}
+
 export function screenToTile(sx: number, sy: number): WorldTile {
   const adjSx = sx - HALF_W;
   const adjSy = sy - HALF_H;
