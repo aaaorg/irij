@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import type {
   CombatResolved,
+  CraftCompleted,
+  CraftProgress,
   DialogClose,
   DialogOpen,
   EntityDespawned,
@@ -9,6 +11,8 @@ import type {
   EntitySpawned,
   EquipmentChanged,
   FindOrCreateMatchResponse,
+  GatherCompleted,
+  GatherProgress,
   HolsterAutopull,
   InventoryChanged,
   LevelUp,
@@ -41,6 +45,8 @@ import { InventoryPanel } from '../ui/InventoryPanel.js';
 import { EquipmentPanel } from '../ui/EquipmentPanel.js';
 import { SkillPanel } from '../ui/SkillPanel.js';
 import { DialogPanel } from '../ui/DialogPanel.js';
+import { CraftingPanel, CRAFTING_RECIPES } from '../ui/CraftingPanel.js';
+import { GatherProgressBar } from '../ui/GatherProgressBar.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -83,6 +89,14 @@ export class WorldScene extends Phaser.Scene {
   // až bude hráč v range (analog `combat.pendingAttackTarget`).
   private pendingNpcInteract: string | null = null;
   private lastNpcInteractSentAt = 0;
+
+  // Phase 10: gathering + crafting UI.
+  private craftingPanel?: CraftingPanel;
+  private gatherBar?: GatherProgressBar;
+  private craftToggleKey?: Phaser.Input.Keyboard.Key;
+  // Klik na resource node z dálky → naviguj k němu + GATHER_RESOURCE.
+  private pendingGatherNodeId: string | null = null;
+  private lastGatherSentAt = 0;
 
   constructor() {
     super('WorldScene');
@@ -132,6 +146,7 @@ export class WorldScene extends Phaser.Scene {
     this.buildInventoryUI();
     this.buildSkillUI();
     this.buildDialogUI();
+    this.buildCraftingUI();
 
     this.entities = new EntityManager(this, userId);
     this.hpBars = new HpBarManager(this);
@@ -240,6 +255,18 @@ export class WorldScene extends Phaser.Scene {
         case Op.DIALOG_CLOSE:
           this.handleDialogClose(payload as DialogClose);
           break;
+        case Op.GATHER_PROGRESS:
+          this.handleGatherProgress(payload as GatherProgress);
+          break;
+        case Op.GATHER_COMPLETED:
+          this.handleGatherCompleted(payload as GatherCompleted);
+          break;
+        case Op.CRAFT_PROGRESS:
+          this.handleCraftProgress(payload as CraftProgress);
+          break;
+        case Op.CRAFT_COMPLETED:
+          this.handleCraftCompleted(payload as CraftCompleted);
+          break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
       }
@@ -294,6 +321,10 @@ export class WorldScene extends Phaser.Scene {
         this.entities.spawnDrop(entity);
       } else if (entity.type === 'npc') {
         this.entities.spawnNpc(entity);
+      } else if (entity.type === 'resource_node') {
+        this.entities.spawnResourceNode(entity);
+      } else if (entity.type === 'craft_station') {
+        this.entities.spawnCraftStation(entity);
       }
     }
   }
@@ -336,6 +367,25 @@ export class WorldScene extends Phaser.Scene {
         type: 'npc',
         position: payload.position,
         npc_id: payload.npc_id,
+        display_name_cs: payload.display_name_cs,
+      });
+    } else if (payload.type === 'resource_node') {
+      this.entities.spawnResourceNode({
+        id: payload.entity_id,
+        type: 'resource_node',
+        position: payload.position,
+        resource_node_id: payload.resource_node_id,
+        resource_kind: payload.resource_kind,
+        resource_state: payload.resource_state,
+        display_name_cs: payload.display_name_cs,
+      });
+    } else if (payload.type === 'craft_station') {
+      this.entities.spawnCraftStation({
+        id: payload.entity_id,
+        type: 'craft_station',
+        position: payload.position,
+        station_id: payload.station_id,
+        station_type: payload.station_type,
         display_name_cs: payload.display_name_cs,
       });
     }
@@ -480,7 +530,8 @@ export class WorldScene extends Phaser.Scene {
     if (
       this.movement.moveStates.size === 0 &&
       this.hpBars.size === 0 &&
-      this.pendingNpcInteract === null
+      this.pendingNpcInteract === null &&
+      this.pendingGatherNodeId === null
     )
       return;
 
@@ -489,6 +540,7 @@ export class WorldScene extends Phaser.Scene {
       if (id === this.selfUserId) {
         this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
         this.tickNpcApproach();
+        this.tickGatherApproach();
       }
     }
 
@@ -502,6 +554,9 @@ export class WorldScene extends Phaser.Scene {
     }
     if (this.pendingNpcInteract) {
       this.tickNpcApproach();
+    }
+    if (this.pendingGatherNodeId) {
+      this.tickGatherApproach();
     }
   }
 
@@ -550,6 +605,20 @@ export class WorldScene extends Phaser.Scene {
     const npcId = this.entities.findNpcAtTile(tile.x, tile.y);
     if (npcId) {
       this.handleNpcClick(npcId);
+      return;
+    }
+
+    // Phase 10: resource node — gather flow.
+    const nodeId = this.entities.findResourceNodeAtTile(tile.x, tile.y);
+    if (nodeId) {
+      this.handleResourceNodeClick(nodeId);
+      return;
+    }
+
+    // Phase 10: craft station — open crafting panel.
+    const stationId = this.entities.findCraftStationAtTile(tile.x, tile.y);
+    if (stationId) {
+      this.craftingPanel?.show();
       return;
     }
 
@@ -644,6 +713,14 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(100_000)
       .setInteractive({ useHandCursor: true });
     skBtn.on('pointerdown', () => this.skillPanel?.toggle());
+
+    // Crafting panel button (Phase 10).
+    const crBtn = this.add
+      .text(220, 40, '[C] Kovárna', { fontSize: '12px', color: '#c8a86a', backgroundColor: '#00000080', padding: { x: 4, y: 2 } })
+      .setScrollFactor(0)
+      .setDepth(100_000)
+      .setInteractive({ useHandCursor: true });
+    crBtn.on('pointerdown', () => this.craftingPanel?.toggle());
   }
 
   private buildSkillUI(): void {
@@ -955,6 +1032,154 @@ export class WorldScene extends Phaser.Scene {
     return null;
   }
 
+  // === Phase 10: gathering + crafting =======================================
+
+  private buildCraftingUI(): void {
+    this.craftingPanel = new CraftingPanel((recipeId, qty) => this.sendCraftRequest(recipeId, qty));
+    this.gatherBar = new GatherProgressBar();
+    if (this.input.keyboard) {
+      this.craftToggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.C);
+      this.craftToggleKey.on('down', () => this.craftingPanel?.toggle());
+    }
+  }
+
+  private handleResourceNodeClick(nodeId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const nodePos = this.entities.getResourceNodePosition(nodeId);
+    if (!nodePos) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(Math.abs(selfPos.x - nodePos.x), Math.abs(selfPos.y - nodePos.y));
+
+    if (cheb <= 2) {
+      this.combat.cancelPendingAttack();
+      this.pendingGatherNodeId = null;
+      this.sendGatherResource(nodeId);
+      return;
+    }
+
+    this.combat.cancelPendingAttack();
+    this.pendingGatherNodeId = nodeId;
+
+    const cardinalOffsets = [
+      { x: 0, y: -1 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 },
+    ];
+    let best = { x: nodePos.x, y: nodePos.y - 1 };
+    let bestDist = Infinity;
+    for (const off of cardinalOffsets) {
+      const tx = nodePos.x + off.x;
+      const ty = nodePos.y + off.y;
+      const d = Math.abs(selfPos.x - tx) + Math.abs(selfPos.y - ty);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: tx, y: ty };
+      }
+    }
+
+    const seq = this.nextSeq();
+    const payload = JSON.stringify({ target: best, client_seq: seq });
+    this.connRef.socket
+      .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+      .catch((err) => console.warn('sendMatchState MOVE_REQUEST (gather approach) failed', err));
+  }
+
+  private tickGatherApproach(): void {
+    if (!this.pendingGatherNodeId || !this.connRef || !this.matchId) return;
+    const nodeId = this.pendingGatherNodeId;
+    const nodePos = this.entities.getResourceNodePosition(nodeId);
+    if (!nodePos) {
+      this.pendingGatherNodeId = null;
+      return;
+    }
+    if (this.selfUserId && this.movement.moveStates.has(this.selfUserId)) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(Math.abs(selfPos.x - nodePos.x), Math.abs(selfPos.y - nodePos.y));
+    if (cheb <= 2) {
+      const now = this.scene?.systems?.game?.loop?.time ?? performance.now();
+      if (now - this.lastGatherSentAt < 500) return;
+      this.lastGatherSentAt = now;
+      this.pendingGatherNodeId = null;
+      this.sendGatherResource(nodeId);
+    }
+  }
+
+  private sendGatherResource(nodeId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const data = JSON.stringify({ resource_node_id: nodeId });
+    this.connRef.socket.sendMatchState(this.matchId, Op.GATHER_RESOURCE, data).catch((err) => {
+      console.warn('sendMatchState GATHER_RESOURCE failed', err);
+    });
+  }
+
+  private sendCraftRequest(recipeId: string, quantity: number): void {
+    if (!this.connRef || !this.matchId) return;
+    const data = JSON.stringify({ recipe_id: recipeId, quantity });
+    this.connRef.socket.sendMatchState(this.matchId, Op.CRAFT_REQUEST, data).catch((err) => {
+      console.warn('sendMatchState CRAFT_REQUEST failed', err);
+    });
+  }
+
+  private handleGatherProgress(payload: GatherProgress): void {
+    if (!payload || !this.gatherBar) return;
+    const nodePos = this.entities.getResourceNodePosition(payload.node_id);
+    const label = nodePos ? 'Těžím…' : 'Těžím…';
+    this.gatherBar.onProgress(payload, label);
+  }
+
+  private handleGatherCompleted(payload: GatherCompleted): void {
+    if (!payload) return;
+    this.gatherBar?.onCompleted(payload);
+    if (payload.success && payload.items_received) {
+      const summary = payload.items_received
+        .map((i) => `+${i.quantity}× ${i.item_id.split('.').pop() ?? i.item_id}`)
+        .join(', ');
+      showToast(this, `Sebráno: ${summary}`, '#88dd88');
+    } else if (!payload.success && payload.reason && payload.reason !== 'cancelled') {
+      const txt = this.localizeGatherReason(payload.reason);
+      showToast(this, txt, '#ff8855');
+    }
+  }
+
+  private localizeGatherReason(reason: string): string {
+    const m: Record<string, string> = {
+      too_far: 'Jsi moc daleko.',
+      tool_missing: 'Nemáš nástroj.',
+      level_too_low: 'Nemáš dostatek úrovně.',
+      depleted: 'Surovina je vyčerpaná.',
+      inventory_full: 'Inventář je plný.',
+      no_node: 'Surovina už neexistuje.',
+    };
+    return m[reason] ?? `Těžba selhala (${reason}).`;
+  }
+
+  private handleCraftProgress(payload: CraftProgress): void {
+    if (!payload) return;
+    this.craftingPanel?.onProgress(payload);
+  }
+
+  private handleCraftCompleted(payload: CraftCompleted): void {
+    if (!payload) return;
+    this.craftingPanel?.onCompleted(payload);
+    if (payload.batch_done && !payload.success && payload.reason && payload.reason !== 'cancelled' && payload.reason !== 'completed') {
+      const m: Record<string, string> = {
+        too_far: 'Vzdálil ses od kovárny.',
+        inputs_missing: 'Chybí suroviny.',
+        tool_missing: 'Chybí nástroj.',
+        station_missing: 'Nejsi u kovárny.',
+        level_too_low: 'Nemáš dostatek úrovně.',
+        inventory_full: 'Inventář je plný.',
+        unknown_recipe: 'Neznámý recept.',
+      };
+      const recipe = CRAFTING_RECIPES.find((r) => r.id === payload.recipe_id);
+      const name = recipe?.name_cs ?? payload.recipe_id;
+      showToast(this, `${name}: ${m[payload.reason] ?? payload.reason}`, '#ff8855');
+    }
+  }
+
   private onShutdown(): void {
     this.scale.off('resize', this.onResize, this);
     this.input.off('pointerdown', this.handlePointerDown, this);
@@ -969,10 +1194,14 @@ export class WorldScene extends Phaser.Scene {
     this.equipmentPanel?.destroy();
     this.skillPanel?.destroy();
     this.dialogPanel?.destroy();
+    this.craftingPanel?.destroy();
+    this.gatherBar?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
     this.skillPanel = undefined;
     this.dialogPanel = undefined;
+    this.craftingPanel = undefined;
+    this.gatherBar = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;
@@ -983,6 +1212,8 @@ export class WorldScene extends Phaser.Scene {
     this.atributy = [];
     this.pendingNpcInteract = null;
     this.lastNpcInteractSentAt = 0;
+    this.pendingGatherNodeId = null;
+    this.lastGatherSentAt = 0;
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;

@@ -24,9 +24,11 @@ import type {
   AiState,
   AtributRow,
   AtributSourceRow,
+  CraftStationDefinition,
   LootTable,
   MobDefinition,
   NpcDefinition,
+  ResourceNodeDefinition,
   SkillRow,
 } from 'irij-shared/types';
 import type { WalkableMask } from './walkable.js';
@@ -106,6 +108,41 @@ export interface DialogSessionState {
   openedAtTick: number;
 }
 
+// Phase 10: resource node runtime instance — držíme stav (available/depleted +
+// respawn timer) odděleně od static definice. Definici servery načítá z
+// data/resource_nodes.json a kopíruje sem.
+export interface ResourceNodeInstanceState {
+  nodeId: string;
+  defId: string; // === nodeId pro 1:1 mapping (MVP)
+  position: Position;
+  state: 'available' | 'depleted';
+  respawnAtTick: number | null;
+  lastChunk: string;
+}
+
+// Per-player aktivní gather session. Hráč může mít max 1 — start nového
+// cancel-uje předchozí.
+export interface GatherSessionState {
+  userId: string;
+  nodeId: string;
+  startedAtTick: number;
+  completeAtTick: number;
+  lastProgressTick: number;
+  position: Position; // pozice hráče v okamžiku start, pro range re-check
+}
+
+// Per-player aktivní crafting session. Quantity = kolik cyklů ještě zbývá
+// (včetně aktuálního).
+export interface CraftSessionState {
+  userId: string;
+  recipeId: string;
+  remainingCycles: number;
+  cycleStartTick: number;
+  cycleCompleteTick: number;
+  lastProgressTick: number;
+  startedAtPosition: Position;
+}
+
 export interface WorldMatchState {
   tick: number;
   walkable: WalkableMask;
@@ -127,6 +164,14 @@ export interface WorldMatchState {
   npcInstances: { [instanceId: string]: NpcInstanceState };
   npcsByChunk: { [chunkKey: string]: { [instanceId: string]: true } };
   dialogSessions: { [userId: string]: DialogSessionState };
+  // Phase 10: resource nodes + craft stations + per-player gather/craft sessions
+  resourceNodeDefinitions: { [defId: string]: ResourceNodeDefinition };
+  resourceNodes: { [nodeId: string]: ResourceNodeInstanceState };
+  resourceNodesByChunk: { [chunkKey: string]: { [nodeId: string]: true } };
+  craftStations: { [stationId: string]: CraftStationDefinition };
+  craftStationsByChunk: { [chunkKey: string]: { [stationId: string]: true } };
+  gatherSessions: { [userId: string]: GatherSessionState };
+  craftSessions: { [userId: string]: CraftSessionState };
 }
 
 export function chunkKeyOf(pos: Position): string {
@@ -348,6 +393,66 @@ export function getNpcsInChunkArea(
     for (const instanceId of Object.keys(bucket)) {
       const npc = state.npcInstances[instanceId];
       if (npc) result.push(npc);
+    }
+  }
+  return result;
+}
+
+// === Resource node + craft station chunk index helpers (Phase 10) ============
+
+export function addResourceNodeToChunk(
+  state: WorldMatchState,
+  nodeId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const bucket = { ...(state.resourceNodesByChunk[key] ?? {}) };
+  bucket[nodeId] = true;
+  state.resourceNodesByChunk[key] = bucket;
+}
+
+export function getResourceNodesInChunkArea(
+  state: WorldMatchState,
+  fromChunk: string,
+  radius: number = BROADCAST_CHUNK_RADIUS,
+): ResourceNodeInstanceState[] {
+  const result: ResourceNodeInstanceState[] = [];
+  for (const chunkKey of Object.keys(state.resourceNodesByChunk)) {
+    if (chunkDistance(fromChunk, chunkKey) > radius) continue;
+    const bucket = state.resourceNodesByChunk[chunkKey];
+    if (!bucket) continue;
+    for (const nodeId of Object.keys(bucket)) {
+      const node = state.resourceNodes[nodeId];
+      if (node) result.push(node);
+    }
+  }
+  return result;
+}
+
+export function addCraftStationToChunk(
+  state: WorldMatchState,
+  stationId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const bucket = { ...(state.craftStationsByChunk[key] ?? {}) };
+  bucket[stationId] = true;
+  state.craftStationsByChunk[key] = bucket;
+}
+
+export function getCraftStationsInChunkArea(
+  state: WorldMatchState,
+  fromChunk: string,
+  radius: number = BROADCAST_CHUNK_RADIUS,
+): CraftStationDefinition[] {
+  const result: CraftStationDefinition[] = [];
+  for (const chunkKey of Object.keys(state.craftStationsByChunk)) {
+    if (chunkDistance(fromChunk, chunkKey) > radius) continue;
+    const bucket = state.craftStationsByChunk[chunkKey];
+    if (!bucket) continue;
+    for (const stationId of Object.keys(bucket)) {
+      const st = state.craftStations[stationId];
+      if (st) result.push(st);
     }
   }
   return result;

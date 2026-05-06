@@ -6,6 +6,7 @@ import {
   MOB_RESPAWN_CHECK_INTERVAL,
   MOVEMENT_SPEED_TPS_BASE,
   PLAYER_AUTOSAVE_INTERVAL,
+  RESOURCE_RESPAWN_CHECK_INTERVAL,
   STORAGE_COLLECTIONS,
   TICK_HZ,
 } from 'irij-shared/constants';
@@ -20,10 +21,12 @@ import { asPlayer, asPlayerState } from 'irij-shared/types';
 import type {
   AtributRow,
   AtributSourceRow,
+  CraftStationDefinition,
   MobDefinition,
   LootTable,
   MobSpawnPoint,
   NpcDefinition,
+  ResourceNodeDefinition,
   SkillRow,
 } from 'irij-shared/types';
 import { totalLevelOf, totalXpOf } from 'irij-shared/skills';
@@ -35,6 +38,7 @@ import mobSpawnsData from '../../data/mob_spawns.json';
 
 import { log } from '../lib/log.js';
 import { getAllNpcs } from '../lib/dialogs.js';
+import { getAllCraftStations, getAllResourceNodeDefs } from '../lib/recipes.js';
 import { savePlayersState } from './autosave.js';
 import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
 import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
@@ -53,9 +57,25 @@ import {
   handleUnequipRequest,
 } from './inventory.js';
 import {
+  advanceGatherSessions,
+  cancelGatherSession,
+  checkResourceNodeRespawns,
+  cleanupGatherSession,
+  handleGatherResource,
+  resourceNodeDisplayName,
+} from './gathering.js';
+import {
+  advanceCraftSessions,
+  cancelCraftSession,
+  cleanupCraftSession,
+  handleCraftRequest,
+} from './crafting.js';
+import {
+  addCraftStationToChunk,
   addMobToChunk,
   addNpcToChunk,
   addPresenceToChunk,
+  addResourceNodeToChunk,
   broadcastToChunkArea,
   chunkKeyOf,
   recipientsInRangeOfChunk,
@@ -63,6 +83,7 @@ import {
   type MobInstanceState,
   type NpcInstanceState,
   type PlayerPresenceState,
+  type ResourceNodeInstanceState,
   type WorldMatchState,
 } from './state.js';
 import {
@@ -148,6 +169,34 @@ export function matchInit(
     npcsByChunk[ck] = { ...npcsByChunk[ck], [instanceId]: true };
   }
 
+  // Phase 10: resource nodes + craft stations.
+  const resourceNodeDefinitions: { [defId: string]: ResourceNodeDefinition } = {};
+  const resourceNodes: { [nodeId: string]: ResourceNodeInstanceState } = {};
+  const resourceNodesByChunkInit: { [ck: string]: { [nodeId: string]: true } } = {};
+  for (const nodeDef of getAllResourceNodeDefs()) {
+    resourceNodeDefinitions[nodeDef.id] = nodeDef;
+    const ck = chunkKeyOf(nodeDef.position);
+    resourceNodes[nodeDef.id] = {
+      nodeId: nodeDef.id,
+      defId: nodeDef.id,
+      position: { ...nodeDef.position },
+      state: 'available',
+      respawnAtTick: null,
+      lastChunk: ck,
+    };
+    if (!resourceNodesByChunkInit[ck]) resourceNodesByChunkInit[ck] = {};
+    resourceNodesByChunkInit[ck] = { ...resourceNodesByChunkInit[ck], [nodeDef.id]: true };
+  }
+
+  const craftStations: { [stationId: string]: CraftStationDefinition } = {};
+  const craftStationsByChunkInit: { [ck: string]: { [stationId: string]: true } } = {};
+  for (const stDef of getAllCraftStations()) {
+    craftStations[stDef.id] = stDef;
+    const ck = chunkKeyOf(stDef.position);
+    if (!craftStationsByChunkInit[ck]) craftStationsByChunkInit[ck] = {};
+    craftStationsByChunkInit[ck] = { ...craftStationsByChunkInit[ck], [stDef.id]: true };
+  }
+
   log(logger, 'info', 'World match init', {
     width: walkable.width,
     height: walkable.height,
@@ -155,6 +204,8 @@ export function matchInit(
     total,
     mobs: Object.keys(mobInstances).length,
     npcs: Object.keys(npcInstances).length,
+    resourceNodes: Object.keys(resourceNodes).length,
+    craftStations: Object.keys(craftStations).length,
   });
 
   const state: WorldMatchState = {
@@ -176,6 +227,13 @@ export function matchInit(
     npcInstances,
     npcsByChunk,
     dialogSessions: {},
+    resourceNodeDefinitions,
+    resourceNodes,
+    resourceNodesByChunk: resourceNodesByChunkInit,
+    craftStations,
+    craftStationsByChunk: craftStationsByChunkInit,
+    gatherSessions: {},
+    craftSessions: {},
   };
   return {
     state,
@@ -348,6 +406,39 @@ export function matchJoin(
       });
     }
 
+    // Include resource nodes (only available state) in snapshot
+    for (const nodeId of Object.keys(state.resourceNodes)) {
+      const node = state.resourceNodes[nodeId];
+      if (!node || node.state !== 'available') continue;
+      if (chunkDistFromKeys(lastChunk, node.lastChunk) > 1) continue;
+      const def = state.resourceNodeDefinitions[node.defId];
+      visibleEntities.push({
+        id: node.nodeId,
+        type: 'resource_node',
+        position: node.position,
+        resource_node_id: node.defId,
+        resource_kind: def?.type,
+        resource_state: node.state,
+        display_name_cs: resourceNodeDisplayName(def ?? null),
+      });
+    }
+
+    // Include craft stations in snapshot
+    for (const stationId of Object.keys(state.craftStations)) {
+      const st = state.craftStations[stationId];
+      if (!st) continue;
+      const stChunk = chunkKeyOf(st.position);
+      if (chunkDistFromKeys(lastChunk, stChunk) > 1) continue;
+      visibleEntities.push({
+        id: st.id,
+        type: 'craft_station',
+        position: st.position,
+        station_id: st.id,
+        station_type: st.station_type,
+        display_name_cs: st.name_cs,
+      });
+    }
+
     // Include ground drops in snapshot
     for (const dropId of Object.keys(state.dropInstances)) {
       const drop = state.dropInstances[dropId];
@@ -444,6 +535,8 @@ export function matchLeave(
     }
     cleanupInventoryRateLogs(state, userId);
     cleanupDialogSession(state, userId);
+    cleanupGatherSession(state, userId);
+    cleanupCraftSession(state, userId);
 
     // Release mob targeting this player
     for (const instanceId of Object.keys(state.mobInstances)) {
@@ -491,6 +584,10 @@ export function matchLoop(
       const result = handleMoveRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
       if (!result.ok && result.reason) {
         broadcastMoveRejected(dispatcher, msg.sender, result.reason, result.clientSeq);
+      } else if (result.ok) {
+        // Movement cancels any in-flight gather/craft session.
+        cancelGatherSession(state, dispatcher, msg.sender.userId, 'cancelled');
+        cancelCraftSession(state, dispatcher, msg.sender.userId, 'cancelled');
       }
     } else if (msg.opCode === Op.ATTACK_REQUEST) {
       handleAttackRequest(state, logger, dispatcher, msg.sender, text, tick);
@@ -510,6 +607,10 @@ export function matchLoop(
       handleDialogChoose(state, logger, nk, dispatcher, msg.sender, text, tick);
     } else if (msg.opCode === Op.DIALOG_CLOSE) {
       handleDialogCloseRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.GATHER_RESOURCE) {
+      handleGatherResource(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.CRAFT_REQUEST) {
+      handleCraftRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
     }
   }
 
@@ -526,6 +627,14 @@ export function matchLoop(
 
   if (tick > 0 && tick % MOB_RESPAWN_CHECK_INTERVAL === 0) {
     checkMobRespawns(state, dispatcher, tick);
+  }
+
+  // Phase 10: gather + craft session advance + node respawn check
+  advanceGatherSessions(state, logger, nk, dispatcher, tick);
+  advanceCraftSessions(state, logger, nk, dispatcher, tick);
+
+  if (tick > 0 && tick % RESOURCE_RESPAWN_CHECK_INTERVAL === 0) {
+    checkResourceNodeRespawns(state, dispatcher, tick);
   }
 
   if (tick > 0 && tick % PLAYER_AUTOSAVE_INTERVAL === 0) {
