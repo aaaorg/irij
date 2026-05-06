@@ -1,0 +1,87 @@
+{
+  "id": "kovar_blatiny",
+  "root_node_id": "root",
+  "nodes": {
+    "root": {
+      "text": {
+        "cs": "Á, vítej, poutníče. Co tě přivádí ke starému kováři?",
+        "en": "Welcome, traveler. What brings you to the old smith?"
+      },
+      "options": [
+        {
+          "id": "smalltalk",
+          "text": { "cs": "Jak se vede?", "en": "How are you?" },
+          "next": "smalltalk_node"
+        },
+        {
+          "id": "shop",
+          "text": { "cs": "Co máš na prodej?", "en": "What do you have for sale?" },
+          "next": "shop_node",
+          "effects": [
+            { "type": "give_item", "item_id": "consumable.whetstone.t1", "quantity": 1 }
+          ]
+        },
+        {
+          "id": "lore_polednice",
+          "text": { "cs": "Slyšel jsem o Polednici v bažině...", "en": "I heard about the Lady of Noon in the marsh..." },
+          "next": "lore_node",
+          "show_if": { "knowledge": "lore.polednice_rumor" }
+        },
+        {
+          "id": "exit",
+          "text": { "cs": "Sbohem.", "en": "Farewell." },
+          "next": null
+        }
+      ]
+    },
+    "smalltalk_node": {
+      "text": {
+        "cs": "Tělo bolí, ruce už nemají sílu jako kdysi. Ale výheň hřeje a kladivo zpívá. Co víc si přát?",
+        "en": "My body aches, my hands aren't as strong as they used to be. But the forge is warm and the hammer sings. What more could one ask?"
+      },
+      "options": [
+        {
+          "id": "back",
+          "text": { "cs": "Něco jiného...", "en": "Let's talk about something else..." },
+          "next": "root"
+        },
+        {
+          "id": "exit",
+          "text": { "cs": "Sbohem.", "en": "Farewell." },
+          "next": null
+        }
+      ]
+    },
+    "shop_node": {
+      "text": {
+        "cs": "Tady máš brusek na čepel. Až budeš mít víc denárů, ukážu ti, co opravdu kovám.",
+        "en": "Here's a whetstone for your blade. Come back when you have more denars and I'll show you what I really forge."
+      },
+      "options": [
+        {
+          "id": "back",
+          "text": { "cs": "Děkuji. Ještě něco...", "en": "Thanks. One more thing..." },
+          "next": "root"
+        },
+        {
+          "id": "exit",
+          "text": { "cs": "Sbohem.", "en": "Farewell." },
+          "next": null
+        }
+      ]
+    },
+    "lore_node": {
+      "text": {
+        "cs": "Polednice... ano. Můj synovec se z bažiny nevrátil. Něco tam je. Něco starého.",
+        "en": "The Lady of Noon... yes. My nephew never returned from the marsh. Something is there. Something ancient."
+      },
+      "options": [
+        {
+          "id": "exit",
+          "text": { "cs": "Hmm... budu si dávat pozor.", "en": "Hmm... I'll be careful." },
+          "next": null
+        }
+      ]
+    }
+  }
+}

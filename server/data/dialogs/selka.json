@@ -1,0 +1,37 @@
+{
+  "id": "selka",
+  "root_node_id": "root",
+  "nodes": {
+    "root": {
+      "text": {
+        "cs": "Pozdrav Pán Bůh. Hledáš teplé jídlo, nebo jen tak okukuješ?",
+        "en": "God's greetings. Looking for a warm meal, or just passing through?"
+      },
+      "options": [
+        {
+          "id": "weather",
+          "text": { "cs": "Co je nového v Blatinách?", "en": "What's new in Blatiny?" },
+          "next": "weather_node"
+        },
+        {
+          "id": "exit",
+          "text": { "cs": "Jdu dál. Sbohem.", "en": "I'll be on my way. Farewell." },
+          "next": null
+        }
+      ]
+    },
+    "weather_node": {
+      "text": {
+        "cs": "Letos suché léto. Kovář pořád reptá, žezlo stárne. Ale chleba pečeme každý den.",
+        "en": "Dry summer this year. The smith complains, the elder grows old. But we still bake bread every day."
+      },
+      "options": [
+        {
+          "id": "exit",
+          "text": { "cs": "Děkuju, sbohem.", "en": "Thanks. Farewell." },
+          "next": null
+        }
+      ]
+    }
+  }
+}

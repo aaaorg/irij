@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import type {
   CombatResolved,
+  DialogClose,
+  DialogOpen,
   EntityDespawned,
   EntityDied,
   EntityMoved,
@@ -38,6 +40,7 @@ import { MoveRejectedToast, showFloatingText, showToast } from '../world/Floatin
 import { InventoryPanel } from '../ui/InventoryPanel.js';
 import { EquipmentPanel } from '../ui/EquipmentPanel.js';
 import { SkillPanel } from '../ui/SkillPanel.js';
+import { DialogPanel } from '../ui/DialogPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -72,6 +75,10 @@ export class WorldScene extends Phaser.Scene {
   private atributy: AtributRow[] = [];
   private skillPanel?: SkillPanel;
   private skillToggleKey?: Phaser.Input.Keyboard.Key;
+
+  // Phase 9: dialog UI.
+  private dialogPanel?: DialogPanel;
+  private dialogEscKey?: Phaser.Input.Keyboard.Key;
 
   constructor() {
     super('WorldScene');
@@ -120,6 +127,7 @@ export class WorldScene extends Phaser.Scene {
     this.buildHud(profile);
     this.buildInventoryUI();
     this.buildSkillUI();
+    this.buildDialogUI();
 
     this.entities = new EntityManager(this, userId);
     this.hpBars = new HpBarManager(this);
@@ -222,6 +230,12 @@ export class WorldScene extends Phaser.Scene {
         case Op.LEVEL_UP:
           this.handleLevelUp(payload as LevelUp);
           break;
+        case Op.DIALOG_OPEN:
+          this.handleDialogOpen(payload as DialogOpen);
+          break;
+        case Op.DIALOG_CLOSE:
+          this.handleDialogClose(payload as DialogClose);
+          break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
       }
@@ -274,6 +288,8 @@ export class WorldScene extends Phaser.Scene {
         }
       } else if (entity.type === 'drop') {
         this.entities.spawnDrop(entity);
+      } else if (entity.type === 'npc') {
+        this.entities.spawnNpc(entity);
       }
     }
   }
@@ -309,6 +325,14 @@ export class WorldScene extends Phaser.Scene {
         type: 'drop',
         position: payload.position,
         items: payload.items,
+      });
+    } else if (payload.type === 'npc') {
+      this.entities.spawnNpc({
+        id: payload.entity_id,
+        type: 'npc',
+        position: payload.position,
+        npc_id: payload.npc_id,
+        display_name_cs: payload.display_name_cs,
       });
     }
   }
@@ -474,8 +498,18 @@ export class WorldScene extends Phaser.Scene {
     if (pointer.x < HUD_GUARD_W && pointer.y < HUD_GUARD_H) return;
     if (!this.connRef || !this.matchId) return;
 
+    // Don't process world clicks while dialog is open.
+    if (this.dialogPanel?.isVisible()) return;
+
     const tile = screenToTile(pointer.worldX, pointer.worldY);
     if (!Number.isFinite(tile.x) || !Number.isFinite(tile.y)) return;
+
+    // NPC priority: if clicking near an NPC, start dialog.
+    const npcId = this.entities.findNpcAtTile(tile.x, tile.y);
+    if (npcId) {
+      this.sendInteractNpc(npcId);
+      return;
+    }
 
     const targetMobId = this.combat.findMobAtTile(tile.x, tile.y);
     if (targetMobId) {
@@ -711,6 +745,63 @@ export class WorldScene extends Phaser.Scene {
 
   // === Inventory network sends ==============================================
 
+  // === Dialog UI =============================================================
+
+  private buildDialogUI(): void {
+    this.dialogPanel = new DialogPanel(
+      (optionId) => this.sendDialogChoose(optionId),
+      () => this.sendDialogClose(),
+    );
+
+    if (this.input.keyboard) {
+      this.dialogEscKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+      this.dialogEscKey.on('down', () => {
+        if (this.dialogPanel?.isVisible()) this.sendDialogClose();
+      });
+    }
+  }
+
+  private handleDialogOpen(payload: DialogOpen): void {
+    if (!payload || !this.dialogPanel) return;
+    this.dialogPanel.showNode(payload);
+  }
+
+  private handleDialogClose(payload: DialogClose): void {
+    void payload;
+    this.dialogPanel?.hide();
+  }
+
+  private sendInteractNpc(npcInstanceId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const data = JSON.stringify({ npc_id: npcInstanceId, action: 'talk' });
+    this.connRef.socket.sendMatchState(this.matchId, Op.INTERACT_NPC, data).catch((err) => {
+      console.warn('sendMatchState INTERACT_NPC failed', err);
+    });
+  }
+
+  private sendDialogChoose(optionId: string): void {
+    if (!this.connRef || !this.matchId || !this.dialogPanel) return;
+    const dialogId = this.dialogPanel.getCurrentDialogId();
+    const nodeId = this.dialogPanel.getCurrentNodeId();
+    if (!dialogId || !nodeId) return;
+    const data = JSON.stringify({
+      dialog_id: dialogId,
+      node_id: nodeId,
+      option_id: optionId,
+    });
+    this.connRef.socket.sendMatchState(this.matchId, Op.DIALOG_CHOOSE, data).catch((err) => {
+      console.warn('sendMatchState DIALOG_CHOOSE failed', err);
+    });
+  }
+
+  private sendDialogClose(): void {
+    this.dialogPanel?.hide();
+    if (!this.connRef || !this.matchId) return;
+    this.connRef.socket.sendMatchState(this.matchId, Op.DIALOG_CLOSE, '{}').catch((err) => {
+      console.warn('sendMatchState DIALOG_CLOSE failed', err);
+    });
+  }
+
   private sendInteractObject(dropId: string): void {
     if (!this.connRef || !this.matchId) return;
     const payload = JSON.stringify({ object_id: dropId, action: 'pickup' });
@@ -785,9 +876,11 @@ export class WorldScene extends Phaser.Scene {
     this.inventoryPanel?.destroy();
     this.equipmentPanel?.destroy();
     this.skillPanel?.destroy();
+    this.dialogPanel?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
     this.skillPanel = undefined;
+    this.dialogPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;

@@ -23,6 +23,7 @@ import type {
   MobDefinition,
   LootTable,
   MobSpawnPoint,
+  NpcDefinition,
   SkillRow,
 } from 'irij-shared/types';
 import { totalLevelOf, totalXpOf } from 'irij-shared/skills';
@@ -33,9 +34,16 @@ import lootTablesData from '../../data/loot_tables.json';
 import mobSpawnsData from '../../data/mob_spawns.json';
 
 import { log } from '../lib/log.js';
+import { getAllNpcs } from '../lib/dialogs.js';
 import { savePlayersState } from './autosave.js';
 import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
 import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
+import {
+  cleanupDialogSession,
+  handleDialogChoose,
+  handleDialogCloseRequest,
+  handleInteractNpc,
+} from './dialog.js';
 import {
   cleanupInventoryRateLogs,
   handleEquipRequest,
@@ -46,12 +54,14 @@ import {
 } from './inventory.js';
 import {
   addMobToChunk,
+  addNpcToChunk,
   addPresenceToChunk,
   broadcastToChunkArea,
   chunkKeyOf,
   recipientsInRangeOfChunk,
   removePresenceFromChunk,
   type MobInstanceState,
+  type NpcInstanceState,
   type PlayerPresenceState,
   type WorldMatchState,
 } from './state.js';
@@ -118,12 +128,33 @@ export function matchInit(
     mobsByChunk[ck] = { ...mobsByChunk[ck], [spawn.id]: true };
   }
 
+  // Phase 9: NPCs — staticky placnuté instance per default_position.
+  const npcDefinitions: { [npcId: string]: NpcDefinition } = {};
+  const npcInstances: { [instanceId: string]: NpcInstanceState } = {};
+  const npcsByChunk: { [ck: string]: { [id: string]: true } } = {};
+
+  for (const def of getAllNpcs()) {
+    npcDefinitions[def.id] = def;
+    const instanceId = def.id; // stejný ID — pro MVP (1:1 def↔instance)
+    const pos = def.default_position;
+    const ck = chunkKeyOf(pos);
+    npcInstances[instanceId] = {
+      instanceId,
+      npcId: def.id,
+      position: { ...pos },
+      lastChunk: ck,
+    };
+    if (!npcsByChunk[ck]) npcsByChunk[ck] = {};
+    npcsByChunk[ck] = { ...npcsByChunk[ck], [instanceId]: true };
+  }
+
   log(logger, 'info', 'World match init', {
     width: walkable.width,
     height: walkable.height,
     walkable: w,
     total,
     mobs: Object.keys(mobInstances).length,
+    npcs: Object.keys(npcInstances).length,
   });
 
   const state: WorldMatchState = {
@@ -141,6 +172,10 @@ export function matchInit(
     dropInstances: {},
     dropsByChunk: {},
     combatEngagements: {},
+    npcDefinitions,
+    npcInstances,
+    npcsByChunk,
+    dialogSessions: {},
   };
   return {
     state,
@@ -298,6 +333,21 @@ export function matchJoin(
       visibleEntities.push(mobEntry);
     }
 
+    // Include NPCs in snapshot (3×3 chunk area)
+    for (const instanceId of Object.keys(state.npcInstances)) {
+      const npc = state.npcInstances[instanceId];
+      if (!npc) continue;
+      if (chunkDistFromKeys(lastChunk, npc.lastChunk) > 1) continue;
+      const def = state.npcDefinitions[npc.npcId];
+      visibleEntities.push({
+        id: npc.instanceId,
+        type: 'npc',
+        position: npc.position,
+        npc_id: npc.npcId,
+        display_name_cs: def?.display_name_cs,
+      });
+    }
+
     // Include ground drops in snapshot
     for (const dropId of Object.keys(state.dropInstances)) {
       const drop = state.dropInstances[dropId];
@@ -393,6 +443,7 @@ export function matchLeave(
       state.combatEngagements = next;
     }
     cleanupInventoryRateLogs(state, userId);
+    cleanupDialogSession(state, userId);
 
     // Release mob targeting this player
     for (const instanceId of Object.keys(state.mobInstances)) {
@@ -453,6 +504,12 @@ export function matchLoop(
       handleItemDropRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
     } else if (msg.opCode === Op.ITEM_USE_REQUEST) {
       handleItemUseRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.INTERACT_NPC) {
+      handleInteractNpc(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.DIALOG_CHOOSE) {
+      handleDialogChoose(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.DIALOG_CLOSE) {
+      handleDialogCloseRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
     }
   }
 

@@ -20,10 +20,18 @@ const MOB_HP_MAX: Record<string, number> = {
   'mob.giant_rat': 15,
 };
 
+// Phase 9: NPC placeholder uses character spritesheet + per-NPC tint until art pass.
+const NPC_TINTS: Record<string, number> = {
+  'npc.kovar_blatiny': 0xd49d4f, // amber/copper — kovář
+  'npc.selka_hospoda': 0xc8d4ad, // pale lime — selka
+};
+
 export class EntityManager {
   readonly otherPlayers = new Map<string, Phaser.GameObjects.Sprite>();
   readonly mobSprites = new Map<string, Phaser.GameObjects.Sprite>();
   readonly dropSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  readonly npcSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  readonly npcTilePositions = new Map<string, Position>();
   readonly tilePositions = new Map<string, Position>();
   // Tile positions for drop entities (separate map for O(1) pickup detection).
   readonly dropTilePositions = new Map<string, Position>();
@@ -72,6 +80,37 @@ export class EntityManager {
     this.tilePositions.set(entity.id, { x, y });
 
     return entity.hp_pct ?? 1;
+  }
+
+  spawnNpc(entity: WorldSnapshotEntity): void {
+    if (!entity?.id || entity.type !== 'npc' || this.npcSprites.has(entity.id)) return;
+
+    const { x, y } = entity.position;
+    const center = tileCenterPx(x, y);
+
+    const sprite = this.scene.add
+      .sprite(center.x, center.y, CHARACTER_KEY, FRAME_FACING_SE)
+      .setOrigin(0.5, 1)
+      .setDepth(depthForDynamic(y));
+
+    const tint = NPC_TINTS[entity.npc_id ?? ''] ?? 0xeeccaa;
+    sprite.setTint(tint);
+
+    if (entity.display_name_cs) sprite.setData('displayName', entity.display_name_cs);
+    if (entity.npc_id) sprite.setData('npcId', entity.npc_id);
+
+    this.npcSprites.set(entity.id, sprite);
+    this.npcTilePositions.set(entity.id, { x, y });
+  }
+
+  // Returns the npc instanceId if any NPC occupies the given tile (Chebyshev ≤ 2).
+  findNpcAtTile(tileX: number, tileY: number): string | null {
+    for (const [npcId, pos] of this.npcTilePositions) {
+      if (Math.abs(pos.x - tileX) <= 2 && Math.abs(pos.y - tileY) <= 2) {
+        return npcId;
+      }
+    }
+    return null;
   }
 
   spawnDrop(entity: WorldSnapshotEntity): void {
@@ -127,6 +166,13 @@ export class EntityManager {
       drop.destroy();
       this.dropSprites.delete(entityId);
       this.dropTilePositions.delete(entityId);
+      return;
+    }
+    const npc = this.npcSprites.get(entityId);
+    if (npc) {
+      npc.destroy();
+      this.npcSprites.delete(entityId);
+      this.npcTilePositions.delete(entityId);
     }
   }
 
@@ -137,7 +183,10 @@ export class EntityManager {
     this.mobSprites.clear();
     for (const s of this.dropSprites.values()) s.destroy();
     this.dropSprites.clear();
+    for (const s of this.npcSprites.values()) s.destroy();
+    this.npcSprites.clear();
     this.tilePositions.clear();
     this.dropTilePositions.clear();
+    this.npcTilePositions.clear();
   }
 }

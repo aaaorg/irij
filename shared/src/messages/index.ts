@@ -6,3 +6,4 @@ export * from './inventory.js';
 export * from './chat.js';
 export * from './profile.js';
 export * from './xp.js';
+export * from './dialog.js';
