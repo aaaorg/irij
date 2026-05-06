@@ -20,6 +20,7 @@ import { int, obj, parse, str } from 'irij-shared';
 
 import { log } from '../lib/log.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
+import { progressObjective } from './quest.js';
 import { awardXp } from './xp.js';
 import {
   addDropToChunk,
@@ -282,6 +283,15 @@ function handleMobDeath(
   // Phase 8: distribuce XP do skillu + atributů killer hráče (write-through
   // do PLAYER_SKILLS storage + XP_AWARDED + LEVEL_UP unicast).
   awardXp(state, logger, nk, dispatcher, killerUserId, def.xp_award, 'mob_kill', mob.instanceId);
+
+  // Phase 11: quest progression — kill_mob objective.
+  const killerPresence = state.presencesByUserId[killerUserId]?.presence;
+  if (killerPresence) {
+    progressObjective(state, nk, logger, dispatcher, killerPresence, {
+      type: 'kill_mob',
+      mob_id: mob.mobId,
+    });
+  }
 
   const respawnTicks = randomInt(def.respawn_min_s, def.respawn_max_s) * TICK_HZ;
 

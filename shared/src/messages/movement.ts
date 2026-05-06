@@ -59,12 +59,12 @@ export interface MoveRejected {
 // stojící na current tile dokud se nehnou znovu (per ADR-019).
 export interface WorldSnapshotEntity {
   id: string;
-  type: 'player' | 'mob' | 'npc' | 'drop' | 'resource_node' | 'craft_station';
+  type: 'player' | 'mob' | 'npc' | 'drop' | 'resource_node' | 'craft_station' | 'quest_object';
   position: Position;
   hp_pct?: number;
   display_name?: string;
   mob_id?: string; // jen pro type='mob'
-  display_name_cs?: string; // jen pro type='mob'/npc/resource_node/craft_station
+  display_name_cs?: string; // jen pro type='mob'/npc/resource_node/craft_station/quest_object
   level?: number; // jen pro type='mob'
   items?: Array<{ item_id: string; quantity: number }>; // jen pro type='drop'
   npc_id?: string; // jen pro type='npc' — klíč do NPC definitions
@@ -74,6 +74,8 @@ export interface WorldSnapshotEntity {
   resource_state?: 'available' | 'depleted';
   station_id?: string;
   station_type?: string;
+  // Phase 11
+  quest_object_id?: string; // jen pro type='quest_object'
   // Path-in-flight data, present jen když entity je uprostřed pohybu.
   path?: Position[];
   speed_tps?: number;

@@ -1,0 +1,60 @@
+{
+  "id": "quest.synovec_kovar",
+  "title": {
+    "cs": "Synovec Starého Kováře",
+    "en": "The Old Smith's Nephew"
+  },
+  "description": {
+    "cs": "Starý kovář v Blatinách hledá svého synovce, který se nevrátil z Bažiny Černav. Mluví se tam o Polednici a o starém zlu, jež dřímá pod hladinou. Najdi stopu, postav se Hastrmanovi a přines kováři pravdu — i kdyby byla krvavá.",
+    "en": "The old smith in Blatiny is searching for his nephew, who never returned from the Černav Swamp. They speak of the Lady of Noon and an ancient evil that slumbers beneath the surface. Find a clue, face the Hastrman, and bring the smith the truth — bloody as it may be."
+  },
+  "category": "side",
+  "village_id": "village.blatiny",
+  "level_recommendation": 8,
+  "prerequisites": {},
+  "steps": [
+    {
+      "id": "find_clue_in_swamp",
+      "description": {
+        "cs": "Najdi v Bažině Černav stopu po synovci.",
+        "en": "Find a trace of the smith's nephew in the Černav Swamp."
+      },
+      "objective": {
+        "type": "interact_with_object",
+        "target": "object.bloody_amulet"
+      }
+    },
+    {
+      "id": "defeat_hastrman",
+      "description": {
+        "cs": "Poraz Hastrmana, který zná pravdu.",
+        "en": "Defeat the Hastrman, who knows the truth."
+      },
+      "objective": {
+        "type": "kill_mob",
+        "target": "mob.hastrman",
+        "count": 1
+      }
+    },
+    {
+      "id": "return_to_kovar",
+      "description": {
+        "cs": "Vrať se ke Starému Kováři s amuletem.",
+        "en": "Return to the Old Smith with the amulet."
+      },
+      "objective": {
+        "type": "talk_to_npc",
+        "target": "npc.kovar_blatiny",
+        "dialog_node": "polednice_quest_complete"
+      }
+    }
+  ],
+  "rewards": {
+    "xp": { "melee": 1500, "thievery": 300, "vitality": 200 },
+    "items": [{ "item_id": "weapon.melee.sword.bronze", "quantity": 1 }],
+    "currency_denar": 250,
+    "knowledge": ["lore.polednice_origin"],
+    "reputation": { "village.blatiny": 200 }
+  },
+  "lockout_after_complete": true
+}

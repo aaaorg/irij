@@ -14,5 +14,13 @@
       { "item_id": "material.hide.rat", "quantity": [1, 1], "chance_pct": 100 },
       { "item_id": "consumable.food.raw_meat", "quantity": [1, 1], "chance_pct": 20 }
     ]
+  },
+  {
+    "id": "loot.hastrman",
+    "rolls": [
+      { "item_id": "material.bone", "quantity": [1, 2], "chance_pct": 100 },
+      { "item_id": "consumable.food.raw_meat", "quantity": [1, 2], "chance_pct": 40 },
+      { "item_id": "currency.denar", "quantity": [10, 25], "chance_pct": 100 }
+    ]
   }
 ]

@@ -76,6 +76,7 @@ export const STORAGE_COLLECTIONS = {
   PLAYER_STATE: 'player_state',
   PLAYER_SKILLS: 'player_skills',
   PLAYER_INVENTORY: 'player_inventory',
+  PLAYER_QUESTS: 'player_quests',
 } as const;
 
 // Profile validation — viz docs/02a Player.username / display_name.

@@ -41,6 +41,10 @@ export class EntityManager {
   readonly craftStationSprites = new Map<string, Phaser.GameObjects.Container>();
   readonly craftStationPositions = new Map<string, Position>();
   readonly craftStationTypes = new Map<string, string>();
+  // Phase 11: quest objects.
+  readonly questObjectSprites = new Map<string, Phaser.GameObjects.Container>();
+  readonly questObjectPositions = new Map<string, Position>();
+  readonly questObjectDisplayNames = new Map<string, string>();
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -205,6 +209,46 @@ export class EntityManager {
     return false;
   }
 
+  // Phase 11: quest object placeholder — magenta diamond + label, depth ~props band.
+  // Po interakci server pošle ENTITY_DESPAWNED, despawnEntity() je odebere.
+  spawnQuestObject(entity: WorldSnapshotEntity): void {
+    if (!entity?.id || entity.type !== 'quest_object' || this.questObjectSprites.has(entity.id)) return;
+
+    const { x, y } = entity.position;
+    const center = tileCenterPx(x, y);
+    const star = this.scene.add.star(0, -10, 5, 6, 14, 0xd6457c).setStrokeStyle(2, 0xffeeaa);
+    const label = this.scene.add
+      .text(0, -32, entity.display_name_cs ?? 'Quest objekt', {
+        fontSize: '10px',
+        color: '#ffd1ec',
+        backgroundColor: '#000000a0',
+        padding: { x: 3, y: 1 },
+      })
+      .setOrigin(0.5, 1);
+    const container = this.scene.add.container(center.x, center.y, [star, label]);
+    container.setDepth(depthForDynamic(y) - 1);
+    container.setData('questObjectId', entity.quest_object_id ?? entity.id);
+
+    this.questObjectSprites.set(entity.id, container);
+    this.questObjectPositions.set(entity.id, { x, y });
+    this.questObjectDisplayNames.set(entity.id, entity.display_name_cs ?? 'Něco zvláštního');
+  }
+
+  getQuestObjectDisplayName(id: string): string | undefined {
+    return this.questObjectDisplayNames.get(id);
+  }
+
+  findQuestObjectAtTile(tileX: number, tileY: number): string | null {
+    for (const [id, pos] of this.questObjectPositions) {
+      if (pos.x === tileX && pos.y === tileY) return id;
+    }
+    return null;
+  }
+
+  getQuestObjectPosition(id: string): Position | undefined {
+    return this.questObjectPositions.get(id);
+  }
+
   spawnDrop(entity: WorldSnapshotEntity): void {
     if (!entity?.id || this.dropSprites.has(entity.id)) return;
 
@@ -280,6 +324,14 @@ export class EntityManager {
       this.craftStationSprites.delete(entityId);
       this.craftStationPositions.delete(entityId);
       this.craftStationTypes.delete(entityId);
+      return;
+    }
+    const questObj = this.questObjectSprites.get(entityId);
+    if (questObj) {
+      questObj.destroy();
+      this.questObjectSprites.delete(entityId);
+      this.questObjectPositions.delete(entityId);
+      this.questObjectDisplayNames.delete(entityId);
     }
   }
 
@@ -296,11 +348,15 @@ export class EntityManager {
     this.resourceNodeSprites.clear();
     for (const s of this.craftStationSprites.values()) s.destroy();
     this.craftStationSprites.clear();
+    for (const s of this.questObjectSprites.values()) s.destroy();
+    this.questObjectSprites.clear();
     this.tilePositions.clear();
     this.dropTilePositions.clear();
     this.npcTilePositions.clear();
     this.resourceNodePositions.clear();
     this.craftStationPositions.clear();
     this.craftStationTypes.clear();
+    this.questObjectPositions.clear();
+    this.questObjectDisplayNames.clear();
   }
 }

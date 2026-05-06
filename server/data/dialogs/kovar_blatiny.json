@@ -32,10 +32,42 @@
           ]
         },
         {
-          "id": "lore_polednice",
-          "text": { "cs": "Slyšel jsem o Polednici v bažině...", "en": "I heard about the Lady of Noon in the marsh..." },
-          "next": "lore_node",
-          "show_if": { "knowledge": "lore.polednice_rumor" }
+          "id": "quest_offer",
+          "text": { "cs": "Vypadáš ustaraně. Stalo se něco?", "en": "You look troubled. What happened?" },
+          "next": "polednice_quest_offer",
+          "show_if": {
+            "quest_state": { "quest_id": "quest.synovec_kovar", "state": "not_started" }
+          }
+        },
+        {
+          "id": "quest_active_check",
+          "text": { "cs": "Pořád hledám tvého synovce.", "en": "I'm still searching for your nephew." },
+          "next": "polednice_quest_in_progress",
+          "show_if": {
+            "quest_state": {
+              "quest_id": "quest.synovec_kovar",
+              "state": "active",
+              "not_current_step_id": "return_to_kovar"
+            }
+          }
+        },
+        {
+          "id": "quest_complete",
+          "text": { "cs": "Vracím se z bažiny... s amuletem.", "en": "I return from the marsh... with an amulet." },
+          "next": "polednice_quest_complete",
+          "show_if": {
+            "quest_state": {
+              "quest_id": "quest.synovec_kovar",
+              "state": "active",
+              "current_step_id": "return_to_kovar"
+            }
+          }
+        },
+        {
+          "id": "quest_lore",
+          "text": { "cs": "Co teď víme o Polednici?", "en": "What do we know about the Lady of Noon now?" },
+          "next": "polednice_lore_after",
+          "show_if": { "knowledge": "lore.polednice_origin" }
         },
         {
           "id": "exit",
@@ -98,15 +130,79 @@
         }
       ]
     },
-    "lore_node": {
+    "polednice_quest_offer": {
       "text": {
-        "cs": "Polednice... ano. Můj synovec se z bažiny nevrátil. Něco tam je. Něco starého.",
-        "en": "The Lady of Noon... yes. My nephew never returned from the marsh. Something is there. Something ancient."
+        "cs": "Synovec... Janek. Už třetí týden, co odešel sbírat dříví na okraji Černavi. Lidé říkají, že tam stále chodí Polednice a že se z bažiny něco probouzí. Sám už tam nedojdu. Půjdeš ty? Najdi po něm cokoliv — krev, kus oděvu, cokoliv.",
+        "en": "My nephew... Janek. Three weeks since he went out to gather wood at the edge of the Černav. People say the Lady of Noon still walks there, that something is waking beneath the marsh. I cannot make the journey. Will you go? Find anything of him — blood, a scrap of cloth, anything."
       },
       "options": [
         {
+          "id": "accept",
+          "text": { "cs": "Pomohu ti najít ho.", "en": "I will help you find him." },
+          "next": null,
+          "effects": [
+            { "type": "start_quest", "quest_id": "quest.synovec_kovar" }
+          ]
+        },
+        {
+          "id": "decline",
+          "text": { "cs": "To je nad mé síly. Promiň.", "en": "That is beyond my strength. I'm sorry." },
+          "next": "root"
+        }
+      ]
+    },
+    "polednice_quest_in_progress": {
+      "text": {
+        "cs": "Buď opatrný v bažině. Hastrman tam není sám. A pamatuj — chci vědět všechno, ať je to jakkoliv těžké.",
+        "en": "Be careful in the marsh. The Hastrman is not alone there. And remember — I want to know everything, no matter how hard."
+      },
+      "options": [
+        {
+          "id": "back",
+          "text": { "cs": "Vydám se zpátky.", "en": "I'll head back out." },
+          "next": "root"
+        },
+        {
           "id": "exit",
-          "text": { "cs": "Hmm... budu si dávat pozor.", "en": "Hmm... I'll be careful." },
+          "text": { "cs": "Sbohem.", "en": "Farewell." },
+          "next": null
+        }
+      ]
+    },
+    "polednice_quest_complete": {
+      "text": {
+        "cs": "Ten amulet znám. Dal jsem mu ho, když nastoupil do učení. Tak je to tedy pravda... A Hastrman ho strážil. Polednice se probouzí, kovaři. Děkuji ti — víc, než dokážu říct. Vezmi si tento meč; kovám ho už od chvíle, co Janek odešel. Patří tomu, kdo se nebál jít, kam já už nemohu.",
+        "en": "I know that amulet. I gave it to him when he became my apprentice. So it is true... And the Hastrman was its guardian. The Lady of Noon is waking, smith. Thank you — more than I can say. Take this sword; I have been forging it since Janek left. It belongs to one who dared go where I no longer can."
+      },
+      "options": [
+        {
+          "id": "finish",
+          "text": { "cs": "Bude mi ctí.", "en": "It would be my honor." },
+          "next": null,
+          "effects": [
+            {
+              "type": "complete_quest_step",
+              "quest_id": "quest.synovec_kovar",
+              "step_id": "return_to_kovar"
+            }
+          ]
+        }
+      ]
+    },
+    "polednice_lore_after": {
+      "text": {
+        "cs": "Polednice... staré jméno pro starou věc. Pamatuju na ni z dětských vyprávění babičky. Říkala, že přišla v poledne, když všichni spali ve stínu — vzala ty, co se neschovali. Teď víme, že to nebyla jen pohádka. A v bažině s ní spí ještě něco staršího.",
+        "en": "The Lady of Noon... an old name for an old thing. I remember her from my grandmother's stories. She came at noon, when all slept in the shade — she took those who would not hide. Now we know it was no mere tale. And in the marsh, something older still sleeps with her."
+      },
+      "options": [
+        {
+          "id": "back",
+          "text": { "cs": "Hmm...", "en": "Hmm..." },
+          "next": "root"
+        },
+        {
+          "id": "exit",
+          "text": { "cs": "Sbohem.", "en": "Farewell." },
           "next": null
         }
       ]

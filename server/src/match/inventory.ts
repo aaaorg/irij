@@ -40,11 +40,13 @@ import {
 import { log } from '../lib/log.js';
 import { logAudit } from '../lib/audit.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
+import { progressObjective } from './quest.js';
 import {
   addDropToChunk,
   broadcastToChunkArea,
   chunkKeyOf,
   removeDropFromChunk,
+  removeQuestObjectFromChunk,
   type DropInstanceState,
   type WorldMatchState,
 } from './state.js';
@@ -179,6 +181,12 @@ export function handleInteractObject(
   const result = parse(InteractObjectSchema, parsed);
   if (!result.ok) return;
   const req = result.value as InteractObjectRequest;
+
+  // Phase 11: branch — quest object interact (different action + state lookup).
+  if (req.action === 'interact') {
+    handleQuestObjectInteract(state, logger, nk, dispatcher, presence, req.object_id);
+    return;
+  }
   if (req.action !== 'pickup') return;
 
   // Rate limit.
@@ -695,4 +703,68 @@ export function cleanupInventoryRateLogs(state: WorldMatchState, userId: string)
     delete next[userId];
     state.interactRequestLog = next;
   }
+}
+
+// ── Phase 11: quest object interact ──────────────────────────────────────────
+// Hráč klikl na quest objekt na mapě (např. krvavý amulet). Server ověří
+// existenci, dosah, ne-consumed; pokud OK, marknuje consumed + broadcastne
+// ENTITY_DESPAWNED + propaguje quest progress přes progressObjective.
+
+function handleQuestObjectInteract(
+  state: WorldMatchState,
+  logger: nkruntime.Logger,
+  nk: nkruntime.Nakama,
+  dispatcher: nkruntime.MatchDispatcher,
+  presence: nkruntime.Presence,
+  objectInstanceId: string,
+): void {
+  const userId = presence.userId;
+  const ps = state.presencesByUserId[userId];
+  if (!ps) return;
+
+  const obj = state.questObjectInstances[objectInstanceId];
+  if (!obj) {
+    log(logger, 'debug', 'quest_object_interact: not found', {
+      userId: userId.slice(0, 8),
+      objectId: objectInstanceId,
+    });
+    return;
+  }
+  if (obj.consumed) {
+    log(logger, 'debug', 'quest_object_interact: already consumed', {
+      objectId: objectInstanceId,
+    });
+    return;
+  }
+  if (chebyshevDistance(ps.position, obj.position) > 2) {
+    log(logger, 'debug', 'quest_object_interact: too far', {
+      userId: userId.slice(0, 8),
+      dist: chebyshevDistance(ps.position, obj.position),
+    });
+    return;
+  }
+
+  logAudit(nk, 'quest_object_interacted', {
+    userId,
+    payload: { object_id: obj.defId, instance_id: objectInstanceId },
+  });
+  log(logger, 'info', 'quest object interacted', {
+    userId: userId.slice(0, 8),
+    objectId: obj.defId,
+  });
+
+  // Propagate to quest engine — matches active quest with interact_with_object
+  // objective targeting this defId.
+  progressObjective(state, nk, logger, dispatcher, presence, {
+    type: 'interact_with_object',
+    object_id: obj.defId,
+  });
+
+  // Phase 11 MVP: nemažeme objekt globálně — `consume_on_interact` je per-player
+  // semantika, kterou Phase 12+ implementuje (track v PlayerQuestBlob.consumed_objects
+  // + filter v WORLD_SNAPSHOT). Pro MVP necháváme objekt viditelný; opakovaná
+  // interakce je no-op (progressObjective idempotentně zkontroluje aktivní step).
+  // Bez tohoto by druhý hráč nemohl quest dokončit po prvním v rámci jednoho match
+  // instance.
+  void removeQuestObjectFromChunk; // suppress unused warning, kept for re-enable
 }

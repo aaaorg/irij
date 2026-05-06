@@ -1,11 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import type { DialogOption } from 'irij-shared/types';
+import { emptyQuestBlob } from 'irij-shared/types';
 
 import {
   isOptionVisible,
   parseDialogChooseRequest,
   parseInteractNpcRequest,
 } from './dialog.js';
+import { checkOptionVisibility } from './quest.js';
+
+// Test stub state — minimal subset needed for isOptionVisible to call
+// getQuestBlob / checkOptionVisibility. We only need playerQuestBlobs.
+function makeState(blob = emptyQuestBlob()) {
+  return {
+    playerQuestBlobs: { 'user1': blob },
+    playerQuestVersions: {},
+  } as unknown as Parameters<typeof isOptionVisible>[1];
+}
 
 describe('parseInteractNpcRequest', () => {
   it('parses valid talk request', () => {
@@ -72,28 +83,156 @@ describe('isOptionVisible', () => {
       text: { cs: 'A' },
       next: 'b',
     };
-    expect(isOptionVisible(opt)).toBe(true);
+    expect(isOptionVisible(opt, makeState(), 'user1')).toBe(true);
   });
 
-  it('returns false when show_if requires knowledge (Phase 11+ stub)', () => {
+  it('hides option when knowledge gate is missing', () => {
     const opt: DialogOption = {
       id: 'a',
       text: { cs: 'A' },
       next: 'b',
       show_if: { knowledge: 'lore.polednice_rumor' },
     };
-    // Phase 9: gated options jsou vždy hidden, dokud není implementovaný knowledge check.
-    expect(isOptionVisible(opt)).toBe(false);
+    expect(isOptionVisible(opt, makeState(), 'user1')).toBe(false);
   });
 
-  it('returns false when show_if requires reputation_min (Phase 11+ stub)', () => {
+  it('shows option when knowledge gate is satisfied', () => {
     const opt: DialogOption = {
       id: 'a',
       text: { cs: 'A' },
       next: 'b',
-      show_if: { reputation_min: 100 },
+      show_if: { knowledge: 'lore.polednice_rumor' },
     };
-    expect(isOptionVisible(opt)).toBe(false);
+    const blob = emptyQuestBlob();
+    blob.knowledge.push('lore.polednice_rumor');
+    expect(isOptionVisible(opt, makeState(blob), 'user1')).toBe(true);
+  });
+
+  it('hides option when reputation_min not met (default 100, requires 300)', () => {
+    const opt: DialogOption = {
+      id: 'a',
+      text: { cs: 'A' },
+      next: 'b',
+      show_if: { reputation_min: { village_id: 'village.blatiny', value: 300 } },
+    };
+    expect(isOptionVisible(opt, makeState(), 'user1')).toBe(false);
+  });
+
+  it('shows option when reputation_min satisfied', () => {
+    const opt: DialogOption = {
+      id: 'a',
+      text: { cs: 'A' },
+      next: 'b',
+      show_if: { reputation_min: { village_id: 'village.blatiny', value: 100 } },
+    };
+    const blob = emptyQuestBlob();
+    blob.reputation['village.blatiny'] = 150;
+    expect(isOptionVisible(opt, makeState(blob), 'user1')).toBe(true);
+  });
+});
+
+describe('checkOptionVisibility — quest_state gate', () => {
+  it('not_started: visible when no progress recorded', () => {
+    const blob = emptyQuestBlob();
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: { quest_id: 'quest.synovec_kovar', state: 'not_started' },
+      }),
+    ).toBe(true);
+  });
+
+  it('not_started: hidden when quest active', () => {
+    const blob = emptyQuestBlob();
+    blob.active['quest.synovec_kovar'] = {
+      quest_id: 'quest.synovec_kovar',
+      state: 'active',
+      current_step_id: 'find_clue_in_swamp',
+      step_progress: {},
+      started_at: '2026-05-06T10:00:00Z',
+    };
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: { quest_id: 'quest.synovec_kovar', state: 'not_started' },
+      }),
+    ).toBe(false);
+  });
+
+  it('active + current_step_id matches', () => {
+    const blob = emptyQuestBlob();
+    blob.active['quest.synovec_kovar'] = {
+      quest_id: 'quest.synovec_kovar',
+      state: 'active',
+      current_step_id: 'return_to_kovar',
+      step_progress: {},
+      started_at: '2026-05-06T10:00:00Z',
+    };
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: {
+          quest_id: 'quest.synovec_kovar',
+          state: 'active',
+          current_step_id: 'return_to_kovar',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('active + not_current_step_id excludes return step', () => {
+    const blob = emptyQuestBlob();
+    blob.active['quest.synovec_kovar'] = {
+      quest_id: 'quest.synovec_kovar',
+      state: 'active',
+      current_step_id: 'return_to_kovar',
+      step_progress: {},
+      started_at: '2026-05-06T10:00:00Z',
+    };
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: {
+          quest_id: 'quest.synovec_kovar',
+          state: 'active',
+          not_current_step_id: 'return_to_kovar',
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('active + not_current_step_id allows mid-step', () => {
+    const blob = emptyQuestBlob();
+    blob.active['quest.synovec_kovar'] = {
+      quest_id: 'quest.synovec_kovar',
+      state: 'active',
+      current_step_id: 'find_clue_in_swamp',
+      step_progress: {},
+      started_at: '2026-05-06T10:00:00Z',
+    };
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: {
+          quest_id: 'quest.synovec_kovar',
+          state: 'active',
+          not_current_step_id: 'return_to_kovar',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('completed: only visible after completion', () => {
+    const blob = emptyQuestBlob();
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: { quest_id: 'quest.synovec_kovar', state: 'completed' },
+      }),
+    ).toBe(false);
+    blob.completed['quest.synovec_kovar'] = {
+      quest_id: 'quest.synovec_kovar',
+      completed_at: '2026-05-06T11:00:00Z',
+    };
+    expect(
+      checkOptionVisibility(blob, {
+        quest_state: { quest_id: 'quest.synovec_kovar', state: 'completed' },
+      }),
+    ).toBe(true);
   });
 });
 

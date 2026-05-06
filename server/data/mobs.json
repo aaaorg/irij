@@ -52,5 +52,32 @@
     "level_aggro_threshold": 10,
     "respawn_min_s": 30,
     "respawn_max_s": 90
+  },
+  {
+    "id": "mob.hastrman",
+    "name_cs": "Hastrman",
+    "name_en": "Hastrman",
+    "appearance_id": "sprite.mob.hastrman",
+    "level": 5,
+    "stats": {
+      "hp_max": 28,
+      "damage_min": 1,
+      "damage_max": 3,
+      "attack_speed_ticks": 6,
+      "defense_melee": 0,
+      "defense_ranged": 1,
+      "defense_magic": 0,
+      "weapon_class": "melee",
+      "movement_speed_tps": 2.5,
+      "range_tiles": 1
+    },
+    "ai_behavior": "aggressive_basic",
+    "loot_table_id": "loot.hastrman",
+    "xp_award": { "melee": 120, "vitality": 30 },
+    "aggro_radius_tiles": 4,
+    "leash_radius_tiles": 14,
+    "level_aggro_threshold": 10,
+    "respawn_min_s": 120,
+    "respawn_max_s": 240
   }
 ]

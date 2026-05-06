@@ -8,7 +8,7 @@
     "flags": {
       "talkable": true,
       "merchant": true,
-      "quest_giver": false,
+      "quest_giver": true,
       "master": false,
       "crafter": false,
       "attackable": false,

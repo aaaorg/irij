@@ -59,6 +59,11 @@ function makeState(presences: Record<string, PlayerPresenceState>): WorldMatchSt
     craftStationsByChunk: {},
     gatherSessions: {},
     craftSessions: {},
+    questObjectDefinitions: {},
+    questObjectInstances: {},
+    questObjectsByChunk: {},
+    playerQuestBlobs: {},
+    playerQuestVersions: {},
   };
 }
 
