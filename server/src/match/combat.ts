@@ -20,6 +20,7 @@ import { int, obj, parse, str } from 'irij-shared';
 
 import { log } from '../lib/log.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
+import { awardXp } from './xp.js';
 import {
   addDropToChunk,
   broadcastToChunkArea,
@@ -115,16 +116,18 @@ export function handleAttackRequest(
 export function runCombatTick(
   state: WorldMatchState,
   logger: nkruntime.Logger,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   tick: number,
 ): void {
-  resolvePlayerAttacks(state, logger, dispatcher, tick);
+  resolvePlayerAttacks(state, logger, nk, dispatcher, tick);
   resolveMobAttacks(state, logger, dispatcher, tick);
 }
 
 function resolvePlayerAttacks(
   state: WorldMatchState,
   logger: nkruntime.Logger,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   tick: number,
 ): void {
@@ -179,7 +182,7 @@ function resolvePlayerAttacks(
     broadcastToChunkArea(dispatcher, state, mob.lastChunk, Op.COMBAT_RESOLVED, combatPayload);
 
     if (newHp <= 0) {
-      handleMobDeath(state, logger, dispatcher, mob, userId, tick);
+      handleMobDeath(state, logger, nk, dispatcher, mob, userId, tick);
       state.combatEngagements = { ...state.combatEngagements, [userId]: null };
     } else {
       state.mobInstances = {
@@ -260,6 +263,7 @@ function resolveMobAttacks(
 function handleMobDeath(
   state: WorldMatchState,
   logger: nkruntime.Logger,
+  nk: nkruntime.Nakama,
   dispatcher: nkruntime.MatchDispatcher,
   mob: MobInstanceState,
   killerUserId: string,
@@ -267,6 +271,10 @@ function handleMobDeath(
 ): void {
   const def = state.mobDefinitions[mob.mobId];
   if (!def) return;
+
+  // Phase 8: distribuce XP do skillu + atributů killer hráče (write-through
+  // do PLAYER_SKILLS storage + XP_AWARDED + LEVEL_UP unicast).
+  awardXp(state, logger, nk, dispatcher, killerUserId, def.xp_award, 'mob_kill', mob.instanceId);
 
   const respawnTicks = randomInt(def.respawn_min_s, def.respawn_max_s) * TICK_HZ;
 

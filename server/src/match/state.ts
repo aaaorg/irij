@@ -20,7 +20,14 @@
 
 import { BROADCAST_CHUNK_RADIUS, CHUNK_SIZE_TILES } from 'irij-shared/constants';
 import type { Position } from 'irij-shared/types';
-import type { AiState, LootTable, MobDefinition } from 'irij-shared/types';
+import type {
+  AiState,
+  AtributRow,
+  AtributSourceRow,
+  LootTable,
+  MobDefinition,
+  SkillRow,
+} from 'irij-shared/types';
 import type { WalkableMask } from './walkable.js';
 
 export interface PlayerPresenceState {
@@ -41,6 +48,14 @@ export interface PlayerPresenceState {
   pathStartedAt: number;
   pathConsumed: number;
   clientSeq: number;
+  // Phase 8: skills + atributy mirror loaded at matchJoin from PLAYER_SKILLS
+  // storage; write-through na každý XP gain. `sources` tracks per-(atribut,
+  // source_skill) cumulative XP for diminishing returns.
+  skilly: SkillRow[];
+  atributy: AtributRow[];
+  sources: AtributSourceRow[];
+  totalLevel: number;
+  totalXp: number;
 }
 
 export interface MobInstanceState {
