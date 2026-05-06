@@ -29,6 +29,14 @@ import { savePlayersState } from './autosave.js';
 import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
 import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
 import {
+  cleanupInventoryRateLogs,
+  handleEquipRequest,
+  handleInteractObject,
+  handleItemDropRequest,
+  handleItemUseRequest,
+  handleUnequipRequest,
+} from './inventory.js';
+import {
   addMobToChunk,
   addPresenceToChunk,
   broadcastToChunkArea,
@@ -117,6 +125,7 @@ export function matchInit(
     presencesByChunk: {},
     moveRequestLog: {},
     attackRequestLog: {},
+    interactRequestLog: {},
     mobDefinitions,
     lootTables,
     mobInstances,
@@ -359,6 +368,7 @@ export function matchLeave(
       delete next[userId];
       state.combatEngagements = next;
     }
+    cleanupInventoryRateLogs(state, userId);
 
     // Release mob targeting this player
     for (const instanceId of Object.keys(state.mobInstances)) {
@@ -409,6 +419,16 @@ export function matchLoop(
       }
     } else if (msg.opCode === Op.ATTACK_REQUEST) {
       handleAttackRequest(state, logger, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.INTERACT_OBJECT) {
+      handleInteractObject(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.EQUIP_REQUEST) {
+      handleEquipRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.UNEQUIP_REQUEST) {
+      handleUnequipRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.ITEM_DROP_REQUEST) {
+      handleItemDropRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.ITEM_USE_REQUEST) {
+      handleItemUseRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
     }
   }
 

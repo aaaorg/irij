@@ -25,6 +25,8 @@ export class EntityManager {
   readonly mobSprites = new Map<string, Phaser.GameObjects.Sprite>();
   readonly dropSprites = new Map<string, Phaser.GameObjects.Sprite>();
   readonly tilePositions = new Map<string, Position>();
+  // Tile positions for drop entities (separate map for O(1) pickup detection).
+  readonly dropTilePositions = new Map<string, Position>();
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -84,6 +86,17 @@ export class EntityManager {
       .setDepth(depthForDynamic(y) - 1);
 
     this.dropSprites.set(entity.id, sprite);
+    this.dropTilePositions.set(entity.id, { x, y });
+  }
+
+  // Returns the dropId if any drop occupies the given tile (Chebyshev ≤ 1 tolerance).
+  findDropAtTile(tileX: number, tileY: number): string | null {
+    for (const [dropId, pos] of this.dropTilePositions) {
+      if (Math.abs(pos.x - tileX) <= 1 && Math.abs(pos.y - tileY) <= 1) {
+        return dropId;
+      }
+    }
+    return null;
   }
 
   clearRemotePlayers(): void {
@@ -113,6 +126,7 @@ export class EntityManager {
     if (drop) {
       drop.destroy();
       this.dropSprites.delete(entityId);
+      this.dropTilePositions.delete(entityId);
     }
   }
 
@@ -124,5 +138,6 @@ export class EntityManager {
     for (const s of this.dropSprites.values()) s.destroy();
     this.dropSprites.clear();
     this.tilePositions.clear();
+    this.dropTilePositions.clear();
   }
 }
