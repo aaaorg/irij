@@ -113,25 +113,25 @@ export function profileCreateCharacter(
 ): string {
   const userId = ctx.userId;
   if (!userId) {
-    throw new RpcError('invalid_username', 'missing userId');
+    throw new RpcError('invalid_username');
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch {
-    throw new RpcError('invalid_username', 'malformed JSON');
+    throw new RpcError('invalid_username');
   }
 
   const result = parse(CreateCharacterSchema, parsed);
   if (!result.ok) {
     const firstError = result.errors[0] ?? '';
-    if (firstError.includes('username')) throw new RpcError('invalid_username', firstError);
-    if (firstError.includes('display_name')) throw new RpcError('invalid_display_name', firstError);
-    if (firstError.includes('gender')) throw new RpcError('invalid_gender', firstError);
+    if (firstError.includes('username')) throw new RpcError('invalid_username');
+    if (firstError.includes('display_name')) throw new RpcError('invalid_display_name');
+    if (firstError.includes('gender')) throw new RpcError('invalid_gender');
     if (firstError.includes('appearance') || firstError.includes('hair_id') || firstError.includes('skin_tone_id') || firstError.includes('outfit_id'))
-      throw new RpcError('invalid_appearance', firstError);
-    throw new RpcError('invalid_username', firstError);
+      throw new RpcError('invalid_appearance');
+    throw new RpcError('invalid_username');
   }
 
   const req = result.value;
@@ -140,10 +140,10 @@ export function profileCreateCharacter(
   const trimmed = req.display_name.trim();
   const cpLength = [...trimmed].length;
   if (cpLength < DISPLAY_NAME_MIN || cpLength > DISPLAY_NAME_MAX) {
-    throw new RpcError('invalid_display_name', 'display_name code-point length out of range');
+    throw new RpcError('invalid_display_name');
   }
   if (trimmed !== req.display_name) {
-    throw new RpcError('invalid_display_name', 'display_name has leading/trailing whitespace');
+    throw new RpcError('invalid_display_name');
   }
 
   // Anti-double-create: pokud už player blob existuje, odmítni.
@@ -151,12 +151,12 @@ export function profileCreateCharacter(
     { collection: STORAGE_COLLECTIONS.PLAYER, key: userId, userId },
   ]);
   if (existing.length > 0) {
-    throw new RpcError('already_exists', 'character already exists');
+    throw new RpcError('already_exists');
   }
 
   // Username unikátnost přes Nakama account.
   if (isUsernameTaken(nk, req.username, userId)) {
-    throw new RpcError('username_taken', 'username already in use');
+    throw new RpcError('username_taken');
   }
 
   const now = new Date().toISOString();
@@ -206,7 +206,7 @@ export function profileCreateCharacter(
     nk.accountUpdateId(userId, req.username, req.display_name, undefined, undefined, undefined, undefined, undefined);
   } catch (err) {
     log(logger, 'warn', 'accountUpdateId failed', { userId, error: String(err) });
-    throw new RpcError('username_taken', 'accountUpdateId race');
+    throw new RpcError('username_taken');
   }
 
   nk.storageWrite([

@@ -5,8 +5,8 @@
 export class RpcError extends Error {
   public readonly code: string;
 
-  constructor(code: string, detail?: string) {
-    super(detail ? `${code}: ${detail}` : code);
+  constructor(code: string) {
+    super(code);
     this.code = code;
   }
 }
