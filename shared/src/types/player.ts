@@ -119,6 +119,13 @@ export interface PlayerState {
   last_logout_at: string;
 }
 
+// Flat storage blob for inventory collection (STORAGE_COLLECTIONS.PLAYER_INVENTORY).
+export interface PlayerInventoryBlob {
+  inventory: InventorySlot[];
+  satchel: SatchelEntry[];
+  equipment: EquipmentEntry[];
+}
+
 // Runtime narrowing helpers — use after storageRead instead of `as Player` casts.
 
 export function asPlayer(value: unknown): Player | null {
@@ -145,4 +152,13 @@ export function asPlayerState(value: unknown): PlayerState | null {
   if (typeof v.hp_current !== 'number') return null;
   if (typeof v.hp_max !== 'number') return null;
   return value as PlayerState;
+}
+
+export function asPlayerInventory(value: unknown): PlayerInventoryBlob | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.inventory)) return null;
+  if (!Array.isArray(v.equipment)) return null;
+  if (!Array.isArray(v.satchel)) return null;
+  return value as PlayerInventoryBlob;
 }

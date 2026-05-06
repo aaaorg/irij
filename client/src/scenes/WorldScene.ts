@@ -5,12 +5,16 @@ import type {
   EntityDied,
   EntityMoved,
   EntitySpawned,
+  EquipmentChanged,
   FindOrCreateMatchResponse,
+  HolsterAutopull,
+  InventoryChanged,
   MoveRejected,
   WorldSnapshot,
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
 import { DEFAULT_HP, DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
+import type { EquipmentEntry, EquipmentSlot, InventorySlot } from 'irij-shared/types';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, screenToTile, tileCenterPx } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -28,6 +32,8 @@ import { MovementInterpolator } from '../world/MovementInterpolator.js';
 import { CombatController } from '../world/CombatController.js';
 import { HpBarManager } from '../world/HpBarManager.js';
 import { MoveRejectedToast, showFloatingText, showToast } from '../world/FloatingText.js';
+import { InventoryPanel } from '../ui/InventoryPanel.js';
+import { EquipmentPanel } from '../ui/EquipmentPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -49,6 +55,13 @@ export class WorldScene extends Phaser.Scene {
   private combat!: CombatController;
   private hpBars!: HpBarManager;
   private rejectToast!: MoveRejectedToast;
+
+  // Phase 7: inventory & equipment state.
+  private inventory: InventorySlot[] = [];
+  private equipment: EquipmentEntry[] = [];
+  private inventoryPanel?: InventoryPanel;
+  private equipmentPanel?: EquipmentPanel;
+  private invToggleKey?: Phaser.Input.Keyboard.Key;
 
   constructor() {
     super('WorldScene');
@@ -86,9 +99,14 @@ export class WorldScene extends Phaser.Scene {
     const userId = conn.session.user_id!;
     this.selfUserId = userId;
 
+    // Load initial inventory/equipment from profile.
+    this.inventory = profile.inventory ?? [];
+    this.equipment = profile.equipment ?? [];
+
     this.buildTilemap();
     this.spawnPlayer(profile);
     this.buildHud(profile);
+    this.buildInventoryUI();
 
     this.entities = new EntityManager(this, userId);
     this.hpBars = new HpBarManager(this);
@@ -175,6 +193,15 @@ export class WorldScene extends Phaser.Scene {
           break;
         case Op.ENTITY_DIED:
           this.handleEntityDied(payload as EntityDied);
+          break;
+        case Op.INVENTORY_CHANGED:
+          this.handleInventoryChanged(payload as InventoryChanged);
+          break;
+        case Op.EQUIPMENT_CHANGED:
+          this.handleEquipmentChanged(payload as EquipmentChanged);
+          break;
+        case Op.HOLSTER_AUTOPULL:
+          this.handleHolsterAutopull(payload as HolsterAutopull);
           break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
@@ -442,6 +469,13 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
+    // Check if clicking on a drop — send pickup request.
+    const dropId = this.entities.findDropAtTile(tile.x, tile.y);
+    if (dropId) {
+      this.sendInteractObject(dropId);
+      return;
+    }
+
     this.combat.cancelPendingAttack();
     const seq = this.nextSeq();
     const payload = JSON.stringify({
@@ -501,10 +535,152 @@ export class WorldScene extends Phaser.Scene {
       )
       .setScrollFactor(0)
       .setDepth(100_000);
+
+    // Inventory button in HUD.
+    const invBtn = this.add
+      .text(12, 40, '[I] Inventář', { fontSize: '12px', color: '#c8a86a', backgroundColor: '#00000080', padding: { x: 4, y: 2 } })
+      .setScrollFactor(0)
+      .setDepth(100_000)
+      .setInteractive({ useHandCursor: true });
+    invBtn.on('pointerdown', () => {
+      this.inventoryPanel?.toggle();
+      this.equipmentPanel?.toggle();
+    });
   }
 
   private onResize(): void {
     // Phaser Scale.RESIZE handled automatically
+  }
+
+  // === Inventory UI ==========================================================
+
+  private buildInventoryUI(): void {
+    this.inventoryPanel = new InventoryPanel(
+      (slotIdx) => this.sendEquipRequest(slotIdx),
+      (slotIdx) => this.sendItemDropRequest(slotIdx),
+      (slotIdx) => this.sendItemUseRequest(slotIdx, 'consume'),
+    );
+    this.inventoryPanel.update(this.inventory);
+
+    this.equipmentPanel = new EquipmentPanel(
+      (slot) => this.sendUnequipRequest(slot),
+    );
+    this.equipmentPanel.update(this.equipment);
+
+    // 'I' key to toggle.
+    if (this.input.keyboard) {
+      this.invToggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.I);
+      this.invToggleKey.on('down', () => {
+        this.inventoryPanel?.toggle();
+        this.equipmentPanel?.toggle();
+      });
+    }
+  }
+
+  // === Inventory message handlers ===========================================
+
+  private handleInventoryChanged(payload: InventoryChanged): void {
+    if (!payload?.changes) return;
+    // Apply delta to local state.
+    for (const ch of payload.changes) {
+      const slot = this.inventory[ch.slot_index];
+      if (slot) {
+        if (ch.item_id !== undefined) slot.item_id = ch.item_id;
+        if (ch.quantity !== undefined) slot.quantity = ch.quantity;
+      }
+    }
+    this.inventoryPanel?.applyChanges(payload.changes);
+  }
+
+  private handleEquipmentChanged(payload: EquipmentChanged): void {
+    if (!payload) return;
+    // Update local equipment if it affects self.
+    if (payload.player_id === this.selfUserId) {
+      const entry = this.equipment.find((e) => e.slot === payload.slot);
+      if (entry) {
+        entry.item_id = payload.item_id;
+        entry.quantity = payload.item_id ? 1 : 0;
+      }
+      this.equipmentPanel?.applyChange(payload.slot, payload.item_id);
+      this.updatePlayerWeaponVisual();
+    }
+  }
+
+  private handleHolsterAutopull(payload: HolsterAutopull): void {
+    if (!payload) return;
+    showToast(this, `Holster: ${payload.item_id.split('.').pop() ?? '?'}`, '#c8a86a');
+  }
+
+  // === Inventory visual =====================================================
+
+  private updatePlayerWeaponVisual(): void {
+    if (!this.player) return;
+    const weaponId = this.equipmentPanel?.getEquippedWeapon() ?? null;
+    // Armed = subtle blue tint; unarmed = white.
+    this.player.setTint(weaponId ? 0xaad4ff : 0xffffff);
+  }
+
+  // === Inventory network sends ==============================================
+
+  private sendInteractObject(dropId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const payload = JSON.stringify({ object_id: dropId, action: 'pickup' });
+    this.connRef.socket.sendMatchState(this.matchId, Op.INTERACT_OBJECT, payload).catch((err) => {
+      console.warn('sendMatchState INTERACT_OBJECT failed', err);
+    });
+  }
+
+  private sendEquipRequest(slotIndex: number): void {
+    if (!this.connRef || !this.matchId) return;
+    // Auto-detect target slot from item category.
+    const slot = this.inventory[slotIndex];
+    if (!slot?.item_id) return;
+    const targetSlot = this.guessEquipSlot(slot.item_id);
+    if (!targetSlot) {
+      showToast(this, 'Tento předmět nelze equipovat.', '#e25c5c');
+      return;
+    }
+    const payload = JSON.stringify({ source_slot_index: slotIndex, target_equipment_slot: targetSlot });
+    this.connRef.socket.sendMatchState(this.matchId, Op.EQUIP_REQUEST, payload).catch((err) => {
+      console.warn('sendMatchState EQUIP_REQUEST failed', err);
+    });
+  }
+
+  private sendUnequipRequest(slot: EquipmentSlot): void {
+    if (!this.connRef || !this.matchId) return;
+    const payload = JSON.stringify({ source_equipment_slot: slot });
+    this.connRef.socket.sendMatchState(this.matchId, Op.UNEQUIP_REQUEST, payload).catch((err) => {
+      console.warn('sendMatchState UNEQUIP_REQUEST failed', err);
+    });
+  }
+
+  private sendItemDropRequest(slotIndex: number): void {
+    if (!this.connRef || !this.matchId) return;
+    const payload = JSON.stringify({ slot_index: slotIndex });
+    this.connRef.socket.sendMatchState(this.matchId, Op.ITEM_DROP_REQUEST, payload).catch((err) => {
+      console.warn('sendMatchState ITEM_DROP_REQUEST failed', err);
+    });
+  }
+
+  private sendItemUseRequest(slotIndex: number, action: 'consume' | 'drop'): void {
+    if (!this.connRef || !this.matchId) return;
+    const payload = JSON.stringify({ slot_index: slotIndex, action });
+    this.connRef.socket.sendMatchState(this.matchId, Op.ITEM_USE_REQUEST, payload).catch((err) => {
+      console.warn('sendMatchState ITEM_USE_REQUEST failed', err);
+    });
+  }
+
+  private guessEquipSlot(itemId: string): string | null {
+    if (itemId.startsWith('weapon.melee.') || itemId.startsWith('weapon.ranged.') || itemId.startsWith('weapon.magic.')) return 'weapon';
+    if (itemId === 'weapon.shield' || itemId.startsWith('weapon.shield.')) return 'shield';
+    if (itemId.startsWith('armor.head')) return 'helmet';
+    if (itemId.startsWith('armor.body')) return 'body';
+    if (itemId.startsWith('armor.legs')) return 'legs';
+    if (itemId.startsWith('armor.hands')) return 'gloves';
+    if (itemId.startsWith('armor.feet')) return 'boots';
+    if (itemId.startsWith('armor.cape')) return 'cape';
+    if (itemId.startsWith('consumable.whetstone') || itemId.startsWith('consumable.arrow') || itemId.startsWith('consumable.rune')) return 'holster';
+    return null;
   }
 
   private onShutdown(): void {
@@ -517,10 +693,16 @@ export class WorldScene extends Phaser.Scene {
     this.hpBars.destroy();
     this.combat.destroy();
     this.rejectToast.destroy();
+    this.inventoryPanel?.destroy();
+    this.equipmentPanel?.destroy();
+    this.inventoryPanel = undefined;
+    this.equipmentPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;
     this.clientSeq = 0;
+    this.inventory = [];
+    this.equipment = [];
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;

@@ -78,6 +78,7 @@ export interface WorldMatchState {
   presencesByChunk: { [chunkKey: string]: { [userId: string]: true } };
   moveRequestLog: { [userId: string]: number[] };
   attackRequestLog: { [userId: string]: number[] };
+  interactRequestLog: { [userId: string]: number[] };
   // Phase 6: mob & combat state
   mobDefinitions: { [mobId: string]: MobDefinition };
   lootTables: { [tableId: string]: LootTable };

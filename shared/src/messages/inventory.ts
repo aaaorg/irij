@@ -1,5 +1,17 @@
 import type { EquipmentSlot } from '../types/player.js';
 
+// Op.INTERACT_OBJECT (31) — klient → server.
+// Pickup: object_id = dropId, action = 'pickup'.
+export interface InteractObjectRequest {
+  object_id: string;
+  action: 'pickup' | 'open' | 'examine';
+}
+
+export interface ItemDropRequest {
+  slot_index: number;
+  quantity?: number;
+}
+
 export interface ItemUseRequest {
   slot_index: number;
   action: 'consume' | 'examine' | 'drop';
