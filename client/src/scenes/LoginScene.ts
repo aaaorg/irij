@@ -153,19 +153,9 @@ export class LoginScene extends Phaser.Scene {
       }
     } catch (err) {
       console.error('Nakama connect / get_self failed', err);
-      this.setStatus(`Spojení selhalo: ${this.formatError(err)}`, COLORS.textError);
+      this.setStatus('Spojení selhalo, zkus to znovu.', COLORS.textError);
       this.setGuestButtonEnabled(true, 'Hrát jako host');
       this.isConnecting = false;
-    }
-  }
-
-  private formatError(err: unknown): string {
-    if (err instanceof Error) return err.message;
-    if (typeof err === 'string') return err;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return 'Neznámá chyba';
     }
   }
 

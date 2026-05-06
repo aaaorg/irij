@@ -17,11 +17,30 @@ export async function callRpc<TReq extends object, TRes>(
   name: string,
   payload: TReq,
 ): Promise<TRes> {
-  const result = await conn.client.rpc(conn.session, name, payload);
-  if (result.payload === undefined) {
-    throw new Error(`RPC ${name} vrátilo prázdnou odpověď`);
+  try {
+    const result = await conn.client.rpc(conn.session, name, payload);
+    if (result.payload === undefined) {
+      throw new Error(`RPC ${name} vrátilo prázdnou odpověď`);
+    }
+    return result.payload as TRes;
+  } catch (err) {
+    // nakama-js v2 throws the raw fetch Response on non-2xx status.
+    // We need to read the body to get the actual error message.
+    if (err instanceof Response) {
+      throw await responseToError(err);
+    }
+    throw err;
   }
-  return result.payload as TRes;
+}
+
+async function responseToError(response: Response): Promise<Error> {
+  try {
+    const body = (await response.json()) as Record<string, unknown>;
+    const msg = typeof body.message === 'string' ? body.message : response.statusText;
+    return new Error(msg);
+  } catch {
+    return new Error(response.statusText || `HTTP ${response.status}`);
+  }
 }
 
 export async function callRpcSafe<TReq extends object, TRes>(
@@ -52,12 +71,17 @@ function parseRpcError(err: unknown): RpcErrorInfo {
 }
 
 function extractErrorCode(message: string): string {
-  // Nakama gRPC errors come as "code: message" or just the error message.
-  // RpcError on server throws with message = code, so the gRPC error message IS the code.
+  // Server throws `new RpcError(code)` kde message == code (jen [a-z_]+).
+  // Nakama Goja runtime ale Error obalí do toString tvaru se stack trace,
+  // takže klient přes drát dostane jeden ze tří tvarů:
+  //   1) "username_taken"                                  — čistý kód
+  //   2) "username_taken: detail"                          — legacy s detailem
+  //   3) "Error: username_taken at index.js:360:12(3)"     — Goja runtime wrap
   const trimmed = message.trim();
   if (/^[a-z_]+$/.test(trimmed)) return trimmed;
-  // Fallback: try to extract from structured format
-  const match = /^([a-z_]+):\s/.exec(trimmed);
-  if (match?.[1]) return match[1];
+  const colonMatch = /^([a-z_]+):\s/.exec(trimmed);
+  if (colonMatch?.[1]) return colonMatch[1];
+  const gojaMatch = /^Error:\s+([a-z_]+)(?:\s+at\s|$)/.exec(trimmed);
+  if (gojaMatch?.[1]) return gojaMatch[1];
   return 'unknown';
 }
