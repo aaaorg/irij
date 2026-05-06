@@ -23,6 +23,11 @@ function makePs(
     pathStartedAt: 0,
     pathConsumed: 0,
     clientSeq: 0,
+    skilly: [],
+    atributy: [],
+    sources: [],
+    totalLevel: 21,
+    totalXp: 0,
     ...overrides,
   };
 }

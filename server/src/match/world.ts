@@ -17,7 +17,15 @@ import type {
   WorldSnapshotEntity,
 } from 'irij-shared/messages';
 import { asPlayer, asPlayerState } from 'irij-shared/types';
-import type { MobDefinition, LootTable, MobSpawnPoint } from 'irij-shared/types';
+import type {
+  AtributRow,
+  AtributSourceRow,
+  MobDefinition,
+  LootTable,
+  MobSpawnPoint,
+  SkillRow,
+} from 'irij-shared/types';
+import { totalLevelOf, totalXpOf } from 'irij-shared/skills';
 
 import mapJson from '../../../client/public/maps/test_50x50.tmj';
 import mobsData from '../../data/mobs.json';
@@ -170,10 +178,12 @@ export function matchJoin(
     const reads = nk.storageRead([
       { collection: STORAGE_COLLECTIONS.PLAYER, key: userId, userId },
       { collection: STORAGE_COLLECTIONS.PLAYER_STATE, key: userId, userId },
+      { collection: STORAGE_COLLECTIONS.PLAYER_SKILLS, key: userId, userId },
     ]);
     const playerObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER);
     const stateObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_STATE);
-    if (!playerObj || !stateObj) {
+    const skillsObj = reads.find((o) => o.collection === STORAGE_COLLECTIONS.PLAYER_SKILLS);
+    if (!playerObj || !stateObj || !skillsObj) {
       log(logger, 'warn', 'matchJoin: blob missing, kicking', { userId });
       dispatcher.matchKick([presence]);
       continue;
@@ -186,6 +196,15 @@ export function matchJoin(
       dispatcher.matchKick([presence]);
       continue;
     }
+
+    const skillsBlob = skillsObj.value as {
+      atributy?: AtributRow[];
+      skilly?: SkillRow[];
+      sources?: AtributSourceRow[];
+    };
+    const skilly: SkillRow[] = Array.isArray(skillsBlob.skilly) ? skillsBlob.skilly : [];
+    const atributy: AtributRow[] = Array.isArray(skillsBlob.atributy) ? skillsBlob.atributy : [];
+    const sources: AtributSourceRow[] = Array.isArray(skillsBlob.sources) ? skillsBlob.sources : [];
 
     const position = pState.current_position ?? { ...DEFAULT_SPAWN_POSITION };
     const displayName = player.display_name ?? userId.slice(0, 8);
@@ -205,6 +224,11 @@ export function matchJoin(
       pathStartedAt: 0,
       pathConsumed: 0,
       clientSeq: 0,
+      skilly,
+      atributy,
+      sources,
+      totalLevel: totalLevelOf(skilly, atributy),
+      totalXp: totalXpOf(skilly, atributy),
     };
 
     state.presencesByUserId[userId] = ps;
@@ -440,7 +464,7 @@ export function matchLoop(
   }
 
   if (tick > 0 && tick % COMBAT_TICK_INTERVAL === 0) {
-    runCombatTick(state, logger, dispatcher, tick);
+    runCombatTick(state, logger, nk, dispatcher, tick);
   }
 
   if (tick > 0 && tick % MOB_RESPAWN_CHECK_INTERVAL === 0) {

@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./types": "./src/types/index.ts",
     "./messages": "./src/messages/index.ts",
-    "./constants": "./src/constants/index.ts"
+    "./constants": "./src/constants/index.ts",
+    "./skills": "./src/skills/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

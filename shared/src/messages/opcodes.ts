@@ -56,6 +56,8 @@ export const Op = {
   SERVER_TICK: 73,
   STATUS_EFFECT_APPLIED: 74,
   STATUS_EFFECT_EXPIRED: 75,
+  XP_AWARDED: 76,
+  LEVEL_UP: 77,
 
   // Crafting (80-89)
   CRAFT_REQUEST: 80,

@@ -9,12 +9,15 @@ import type {
   FindOrCreateMatchResponse,
   HolsterAutopull,
   InventoryChanged,
+  LevelUp,
   MoveRejected,
   WorldSnapshot,
+  XpAwarded,
 } from 'irij-shared/messages';
 import { Op } from 'irij-shared/messages';
 import { DEFAULT_HP, DEFAULT_SPAWN_POSITION } from 'irij-shared/constants';
-import type { EquipmentEntry, EquipmentSlot, InventorySlot } from 'irij-shared/types';
+import type { AtributRow, EquipmentEntry, EquipmentSlot, InventorySlot, SkillRow } from 'irij-shared/types';
+import { totalLevelOf } from 'irij-shared/skills';
 import type { NakamaConnection } from '../nakama.js';
 import { TILE_H_PX, TILE_W_PX, screenToTile, tileCenterPx } from '../render/projection.js';
 import { depthForDynamic } from '../render/ysort.js';
@@ -34,6 +37,7 @@ import { HpBarManager } from '../world/HpBarManager.js';
 import { MoveRejectedToast, showFloatingText, showToast } from '../world/FloatingText.js';
 import { InventoryPanel } from '../ui/InventoryPanel.js';
 import { EquipmentPanel } from '../ui/EquipmentPanel.js';
+import { SkillPanel } from '../ui/SkillPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -62,6 +66,12 @@ export class WorldScene extends Phaser.Scene {
   private inventoryPanel?: InventoryPanel;
   private equipmentPanel?: EquipmentPanel;
   private invToggleKey?: Phaser.Input.Keyboard.Key;
+
+  // Phase 8: skills + atributy state.
+  private skilly: SkillRow[] = [];
+  private atributy: AtributRow[] = [];
+  private skillPanel?: SkillPanel;
+  private skillToggleKey?: Phaser.Input.Keyboard.Key;
 
   constructor() {
     super('WorldScene');
@@ -102,11 +112,14 @@ export class WorldScene extends Phaser.Scene {
     // Load initial inventory/equipment from profile.
     this.inventory = profile.inventory ?? [];
     this.equipment = profile.equipment ?? [];
+    this.skilly = profile.skilly ?? [];
+    this.atributy = profile.atributy ?? [];
 
     this.buildTilemap();
     this.spawnPlayer(profile);
     this.buildHud(profile);
     this.buildInventoryUI();
+    this.buildSkillUI();
 
     this.entities = new EntityManager(this, userId);
     this.hpBars = new HpBarManager(this);
@@ -202,6 +215,12 @@ export class WorldScene extends Phaser.Scene {
           break;
         case Op.HOLSTER_AUTOPULL:
           this.handleHolsterAutopull(payload as HolsterAutopull);
+          break;
+        case Op.XP_AWARDED:
+          this.handleXpAwarded(payload as XpAwarded);
+          break;
+        case Op.LEVEL_UP:
+          this.handleLevelUp(payload as LevelUp);
           break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
@@ -398,12 +417,7 @@ export class WorldScene extends Phaser.Scene {
       this.entities.otherPlayers.delete(payload.entity_id);
     }
 
-    if (payload.killer_id === this.selfUserId && payload.xp_awarded.length > 0) {
-      const xpText = payload.xp_awarded
-        .map((a) => `+${a.amount} ${a.skill}`)
-        .join(', ');
-      showToast(this, `XP: ${xpText}`, '#44ff44');
-    }
+    // XP toast je řízený přes XP_AWARDED (Phase 8) — handleEntityDied zobrazení vynechá.
   }
 
   private handleSelfDeath(): void {
@@ -546,6 +560,24 @@ export class WorldScene extends Phaser.Scene {
       this.inventoryPanel?.toggle();
       this.equipmentPanel?.toggle();
     });
+
+    // Skill panel button.
+    const skBtn = this.add
+      .text(110, 40, '[K] Schopnosti', { fontSize: '12px', color: '#c8a86a', backgroundColor: '#00000080', padding: { x: 4, y: 2 } })
+      .setScrollFactor(0)
+      .setDepth(100_000)
+      .setInteractive({ useHandCursor: true });
+    skBtn.on('pointerdown', () => this.skillPanel?.toggle());
+  }
+
+  private buildSkillUI(): void {
+    this.skillPanel = new SkillPanel();
+    this.skillPanel.setData(this.atributy, this.skilly, totalLevelOf(this.skilly, this.atributy));
+
+    if (this.input.keyboard) {
+      this.skillToggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.K);
+      this.skillToggleKey.on('down', () => this.skillPanel?.toggle());
+    }
   }
 
   private onResize(): void {
@@ -609,6 +641,63 @@ export class WorldScene extends Phaser.Scene {
   private handleHolsterAutopull(payload: HolsterAutopull): void {
     if (!payload) return;
     showToast(this, `Holster: ${payload.item_id.split('.').pop() ?? '?'}`, '#c8a86a');
+  }
+
+  // === XP / level events ====================================================
+
+  private handleXpAwarded(payload: XpAwarded): void {
+    if (!payload?.gains) return;
+    for (const gain of payload.gains) {
+      const list = gain.type === 'skill' ? this.skilly : this.atributy;
+      const row = list.find((r) => r.name === gain.name);
+      if (row) {
+        row.xp += gain.amount;
+        row.level = gain.level_after;
+      }
+    }
+    const newTotal = totalLevelOf(this.skilly, this.atributy);
+    this.skillPanel?.setData(this.atributy, this.skilly, newTotal);
+
+    const summary = payload.gains
+      .map((g) => `+${g.amount} ${this.localizeXpName(g.type, g.name)}`)
+      .join(', ');
+    showToast(this, `XP: ${summary}`, '#44ff44');
+  }
+
+  private handleLevelUp(payload: LevelUp): void {
+    if (!payload) return;
+    const label = this.localizeXpName(payload.type, payload.name);
+    showToast(this, `LEVEL UP! ${label} → ${payload.new_level}`, '#ffd166');
+  }
+
+  private localizeXpName(type: 'skill' | 'atribut', name: string): string {
+    const skillLabels: Record<string, string> = {
+      melee: 'Boj zblízka',
+      ranged: 'Lukostřelba',
+      magic: 'Kouzelnictví',
+      defense: 'Obrana',
+      mining: 'Hornictví',
+      woodcutting: 'Dřevorubectví',
+      fishing: 'Rybaření',
+      herbalism: 'Bylinkářství',
+      hunting: 'Lov',
+      smithing: 'Kovářství',
+      cooking: 'Vaření',
+      tailoring: 'Krejčovství',
+      alchemy: 'Alchymie',
+      carpentry: 'Tesařství',
+      storytelling: 'Vyprávění',
+      prayer: 'Modlitba',
+      thievery: 'Lupičství',
+    };
+    const atributLabels: Record<string, string> = {
+      strength: 'Síla',
+      dexterity: 'Obratnost',
+      intelligence: 'Inteligence',
+      vitality: 'Životy',
+    };
+    if (type === 'skill') return skillLabels[name] ?? name;
+    return atributLabels[name] ?? name;
   }
 
   // === Inventory visual =====================================================
@@ -695,14 +784,18 @@ export class WorldScene extends Phaser.Scene {
     this.rejectToast.destroy();
     this.inventoryPanel?.destroy();
     this.equipmentPanel?.destroy();
+    this.skillPanel?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
+    this.skillPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;
     this.clientSeq = 0;
     this.inventory = [];
     this.equipment = [];
+    this.skilly = [];
+    this.atributy = [];
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;
