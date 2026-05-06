@@ -513,11 +513,17 @@ export class WorldScene extends Phaser.Scene {
       this.pendingNpcInteract = null;
       return;
     }
+    // Server matchLoop processne messages PŘED advanceMovement, takže serveru
+    // 1 tile zaostává za klientem (klient lerpuje na real-time, server na
+    // tick boundary floor). Pokud bychom firovali při klientském cheb=2,
+    // server by viděl předchozí tile s cheb=3 a silent-rejectnul. Proto
+    // čekáme, až je hráč mimo moveStates (= movement plně dokončen na
+    // klientu) — tím získá server v dalším ticku catch-up window a INTERACT_NPC
+    // přijde už po server-side advance na finální tile.
+    if (this.selfUserId && this.movement.moveStates.has(this.selfUserId)) return;
+
     const selfPos = this.movement.selfTilePosition;
     const cheb = Math.max(Math.abs(selfPos.x - npcPos.x), Math.abs(selfPos.y - npcPos.y));
-    // Server validuje Chebyshev ≤ 2 (NPC_INTERACT_RANGE_TILES). Klient
-    // zde drží stejnou hranici, aby nedošlo k MOVE_REQUEST → INTERACT_NPC →
-    // out-of-range silent drop.
     if (cheb <= 2) {
       const now = this.scene?.systems?.game?.loop?.time ?? performance.now();
       if (now - this.lastNpcInteractSentAt < 500) return;
