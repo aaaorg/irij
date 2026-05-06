@@ -17,11 +17,30 @@ export async function callRpc<TReq extends object, TRes>(
   name: string,
   payload: TReq,
 ): Promise<TRes> {
-  const result = await conn.client.rpc(conn.session, name, payload);
-  if (result.payload === undefined) {
-    throw new Error(`RPC ${name} vrátilo prázdnou odpověď`);
+  try {
+    const result = await conn.client.rpc(conn.session, name, payload);
+    if (result.payload === undefined) {
+      throw new Error(`RPC ${name} vrátilo prázdnou odpověď`);
+    }
+    return result.payload as TRes;
+  } catch (err) {
+    // nakama-js v2 throws the raw fetch Response on non-2xx status.
+    // We need to read the body to get the actual error message.
+    if (err instanceof Response) {
+      throw await responseToError(err);
+    }
+    throw err;
   }
-  return result.payload as TRes;
+}
+
+async function responseToError(response: Response): Promise<Error> {
+  try {
+    const body = (await response.json()) as Record<string, unknown>;
+    const msg = typeof body.message === 'string' ? body.message : response.statusText;
+    return new Error(msg);
+  } catch {
+    return new Error(response.statusText || `HTTP ${response.status}`);
+  }
 }
 
 export async function callRpcSafe<TReq extends object, TRes>(
