@@ -71,12 +71,17 @@ function parseRpcError(err: unknown): RpcErrorInfo {
 }
 
 function extractErrorCode(message: string): string {
-  // Nakama gRPC errors come as "code: message" or just the error message.
-  // RpcError on server throws with message = code, so the gRPC error message IS the code.
+  // Server throws `new RpcError(code)` kde message == code (jen [a-z_]+).
+  // Nakama Goja runtime ale Error obalí do toString tvaru se stack trace,
+  // takže klient přes drát dostane jeden ze tří tvarů:
+  //   1) "username_taken"                                  — čistý kód
+  //   2) "username_taken: detail"                          — legacy s detailem
+  //   3) "Error: username_taken at index.js:360:12(3)"     — Goja runtime wrap
   const trimmed = message.trim();
   if (/^[a-z_]+$/.test(trimmed)) return trimmed;
-  // Fallback: try to extract from structured format
-  const match = /^([a-z_]+):\s/.exec(trimmed);
-  if (match?.[1]) return match[1];
+  const colonMatch = /^([a-z_]+):\s/.exec(trimmed);
+  if (colonMatch?.[1]) return colonMatch[1];
+  const gojaMatch = /^Error:\s+([a-z_]+)(?:\s+at\s|$)/.exec(trimmed);
+  if (gojaMatch?.[1]) return gojaMatch[1];
   return 'unknown';
 }
