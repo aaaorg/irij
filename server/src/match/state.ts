@@ -26,6 +26,7 @@ import type {
   AtributSourceRow,
   LootTable,
   MobDefinition,
+  NpcDefinition,
   SkillRow,
 } from 'irij-shared/types';
 import type { WalkableMask } from './walkable.js';
@@ -86,6 +87,25 @@ export interface DropInstanceState {
   lastChunk: string;
 }
 
+// Phase 9: NPC instance — staticky placed v matchInit. Bez wandering / patrol pro
+// MVP, default_position se použije přímo. Chunk index pro snapshot scoping.
+export interface NpcInstanceState {
+  instanceId: string;
+  npcId: string;
+  position: Position;
+  lastChunk: string;
+}
+
+// Per-player aktivní dialog session. Slouží jako anti-cheat token pro
+// DIALOG_CHOOSE — bez aktivní session server option drop-uje. Auto-expirace
+// není potřeba (klient pošle DIALOG_CLOSE; v matchLeave smažeme).
+export interface DialogSessionState {
+  dialogId: string;
+  npcInstanceId: string; // kterého NPC se dialog týká (pro range re-check)
+  currentNodeId: string;
+  openedAtTick: number;
+}
+
 export interface WorldMatchState {
   tick: number;
   walkable: WalkableMask;
@@ -102,6 +122,11 @@ export interface WorldMatchState {
   dropInstances: { [dropId: string]: DropInstanceState };
   dropsByChunk: { [chunkKey: string]: { [dropId: string]: true } };
   combatEngagements: { [userId: string]: string | null };
+  // Phase 9: NPCs + dialog sessions
+  npcDefinitions: { [npcId: string]: NpcDefinition };
+  npcInstances: { [instanceId: string]: NpcInstanceState };
+  npcsByChunk: { [chunkKey: string]: { [instanceId: string]: true } };
+  dialogSessions: { [userId: string]: DialogSessionState };
 }
 
 export function chunkKeyOf(pos: Position): string {
@@ -292,6 +317,37 @@ export function getMobsInChunkArea(
     for (const instanceId of Object.keys(bucket)) {
       const mob = state.mobInstances[instanceId];
       if (mob) result.push(mob);
+    }
+  }
+  return result;
+}
+
+// === NPC chunk index helpers ===========================================
+
+export function addNpcToChunk(
+  state: WorldMatchState,
+  instanceId: string,
+  pos: Position,
+): void {
+  const key = chunkKeyOf(pos);
+  const bucket = { ...(state.npcsByChunk[key] ?? {}) };
+  bucket[instanceId] = true;
+  state.npcsByChunk[key] = bucket;
+}
+
+export function getNpcsInChunkArea(
+  state: WorldMatchState,
+  fromChunk: string,
+  radius: number = BROADCAST_CHUNK_RADIUS,
+): NpcInstanceState[] {
+  const result: NpcInstanceState[] = [];
+  for (const chunkKey of Object.keys(state.npcsByChunk)) {
+    if (chunkDistance(fromChunk, chunkKey) > radius) continue;
+    const bucket = state.npcsByChunk[chunkKey];
+    if (!bucket) continue;
+    for (const instanceId of Object.keys(bucket)) {
+      const npc = state.npcInstances[instanceId];
+      if (npc) result.push(npc);
     }
   }
   return result;

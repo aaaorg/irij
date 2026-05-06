@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
 import type {
   CombatResolved,
+  DialogClose,
+  DialogOpen,
   EntityDespawned,
   EntityDied,
   EntityMoved,
@@ -38,6 +40,7 @@ import { MoveRejectedToast, showFloatingText, showToast } from '../world/Floatin
 import { InventoryPanel } from '../ui/InventoryPanel.js';
 import { EquipmentPanel } from '../ui/EquipmentPanel.js';
 import { SkillPanel } from '../ui/SkillPanel.js';
+import { DialogPanel } from '../ui/DialogPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -72,6 +75,14 @@ export class WorldScene extends Phaser.Scene {
   private atributy: AtributRow[] = [];
   private skillPanel?: SkillPanel;
   private skillToggleKey?: Phaser.Input.Keyboard.Key;
+
+  // Phase 9: dialog UI.
+  private dialogPanel?: DialogPanel;
+  private dialogEscKey?: Phaser.Input.Keyboard.Key;
+  // Klik na NPC z dálky → naviguj na adjacent tile + odešli INTERACT_NPC
+  // až bude hráč v range (analog `combat.pendingAttackTarget`).
+  private pendingNpcInteract: string | null = null;
+  private lastNpcInteractSentAt = 0;
 
   constructor() {
     super('WorldScene');
@@ -120,6 +131,7 @@ export class WorldScene extends Phaser.Scene {
     this.buildHud(profile);
     this.buildInventoryUI();
     this.buildSkillUI();
+    this.buildDialogUI();
 
     this.entities = new EntityManager(this, userId);
     this.hpBars = new HpBarManager(this);
@@ -222,6 +234,12 @@ export class WorldScene extends Phaser.Scene {
         case Op.LEVEL_UP:
           this.handleLevelUp(payload as LevelUp);
           break;
+        case Op.DIALOG_OPEN:
+          this.handleDialogOpen(payload as DialogOpen);
+          break;
+        case Op.DIALOG_CLOSE:
+          this.handleDialogClose(payload as DialogClose);
+          break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
       }
@@ -274,6 +292,8 @@ export class WorldScene extends Phaser.Scene {
         }
       } else if (entity.type === 'drop') {
         this.entities.spawnDrop(entity);
+      } else if (entity.type === 'npc') {
+        this.entities.spawnNpc(entity);
       }
     }
   }
@@ -309,6 +329,14 @@ export class WorldScene extends Phaser.Scene {
         type: 'drop',
         position: payload.position,
         items: payload.items,
+      });
+    } else if (payload.type === 'npc') {
+      this.entities.spawnNpc({
+        id: payload.entity_id,
+        type: 'npc',
+        position: payload.position,
+        npc_id: payload.npc_id,
+        display_name_cs: payload.display_name_cs,
       });
     }
   }
@@ -449,12 +477,18 @@ export class WorldScene extends Phaser.Scene {
   // === Game loop =========================================================
 
   override update(_time: number, _delta: number): void {
-    if (this.movement.moveStates.size === 0 && this.hpBars.size === 0) return;
+    if (
+      this.movement.moveStates.size === 0 &&
+      this.hpBars.size === 0 &&
+      this.pendingNpcInteract === null
+    )
+      return;
 
     const completed = this.movement.update();
     for (const id of completed) {
       if (id === this.selfUserId) {
         this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
+        this.tickNpcApproach();
       }
     }
 
@@ -466,6 +500,37 @@ export class WorldScene extends Phaser.Scene {
     if (this.combat.pendingAttackTarget) {
       this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
     }
+    if (this.pendingNpcInteract) {
+      this.tickNpcApproach();
+    }
+  }
+
+  private tickNpcApproach(): void {
+    if (!this.pendingNpcInteract || !this.connRef || !this.matchId) return;
+    const npcId = this.pendingNpcInteract;
+    const npcPos = this.entities.getNpcPosition(npcId);
+    if (!npcPos) {
+      this.pendingNpcInteract = null;
+      return;
+    }
+    // Server matchLoop processne messages PŘED advanceMovement, takže serveru
+    // 1 tile zaostává za klientem (klient lerpuje na real-time, server na
+    // tick boundary floor). Pokud bychom firovali při klientském cheb=2,
+    // server by viděl předchozí tile s cheb=3 a silent-rejectnul. Proto
+    // čekáme, až je hráč mimo moveStates (= movement plně dokončen na
+    // klientu) — tím získá server v dalším ticku catch-up window a INTERACT_NPC
+    // přijde už po server-side advance na finální tile.
+    if (this.selfUserId && this.movement.moveStates.has(this.selfUserId)) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(Math.abs(selfPos.x - npcPos.x), Math.abs(selfPos.y - npcPos.y));
+    if (cheb <= 2) {
+      const now = this.scene?.systems?.game?.loop?.time ?? performance.now();
+      if (now - this.lastNpcInteractSentAt < 500) return;
+      this.lastNpcInteractSentAt = now;
+      this.pendingNpcInteract = null;
+      this.sendInteractNpc(npcId);
+    }
   }
 
   // === Input =============================================================
@@ -474,8 +539,19 @@ export class WorldScene extends Phaser.Scene {
     if (pointer.x < HUD_GUARD_W && pointer.y < HUD_GUARD_H) return;
     if (!this.connRef || !this.matchId) return;
 
+    // Don't process world clicks while dialog is open.
+    if (this.dialogPanel?.isVisible()) return;
+
     const tile = screenToTile(pointer.worldX, pointer.worldY);
     if (!Number.isFinite(tile.x) || !Number.isFinite(tile.y)) return;
+
+    // NPC priority: if clicking on an NPC tile, start dialog (navigovat
+    // se k němu, pokud jsme dál než server-side range, pak INTERACT_NPC).
+    const npcId = this.entities.findNpcAtTile(tile.x, tile.y);
+    if (npcId) {
+      this.handleNpcClick(npcId);
+      return;
+    }
 
     const targetMobId = this.combat.findMobAtTile(tile.x, tile.y);
     if (targetMobId) {
@@ -711,6 +787,113 @@ export class WorldScene extends Phaser.Scene {
 
   // === Inventory network sends ==============================================
 
+  // === Dialog UI =============================================================
+
+  private buildDialogUI(): void {
+    this.dialogPanel = new DialogPanel(
+      (optionId) => this.sendDialogChoose(optionId),
+      () => this.sendDialogClose(),
+    );
+
+    if (this.input.keyboard) {
+      this.dialogEscKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+      this.dialogEscKey.on('down', () => {
+        if (this.dialogPanel?.isVisible()) this.sendDialogClose();
+      });
+    }
+  }
+
+  private handleDialogOpen(payload: DialogOpen): void {
+    if (!payload || !this.dialogPanel) return;
+    this.dialogPanel.showNode(payload);
+  }
+
+  private handleDialogClose(payload: DialogClose): void {
+    void payload;
+    this.dialogPanel?.hide();
+  }
+
+  private handleNpcClick(npcInstanceId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const npcPos = this.entities.getNpcPosition(npcInstanceId);
+    if (!npcPos) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(
+      Math.abs(selfPos.x - npcPos.x),
+      Math.abs(selfPos.y - npcPos.y),
+    );
+    // V range — pošli INTERACT_NPC rovnou. Combat pending zruš, ať se
+    // hráč nezačne během dialogu mlátit s mobem.
+    if (cheb <= 2) {
+      this.combat.cancelPendingAttack();
+      this.pendingNpcInteract = null;
+      this.sendInteractNpc(npcInstanceId);
+      return;
+    }
+
+    // Z dálky — navigovat na 4-cardinal adjacent tile (stejně jako combat
+    // approach), stash NPC ID, INTERACT_NPC pošleme v `tickNpcApproach`
+    // až po dokončení pohybu.
+    this.combat.cancelPendingAttack();
+    this.pendingNpcInteract = npcInstanceId;
+
+    const cardinalOffsets = [
+      { x: 0, y: -1 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 },
+    ];
+    let best = { x: npcPos.x, y: npcPos.y - 1 };
+    let bestDist = Infinity;
+    for (const off of cardinalOffsets) {
+      const tx = npcPos.x + off.x;
+      const ty = npcPos.y + off.y;
+      const d = Math.abs(selfPos.x - tx) + Math.abs(selfPos.y - ty);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: tx, y: ty };
+      }
+    }
+
+    const seq = this.nextSeq();
+    const payload = JSON.stringify({ target: best, client_seq: seq });
+    this.connRef.socket
+      .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+      .catch((err) => console.warn('sendMatchState MOVE_REQUEST (npc approach) failed', err));
+  }
+
+  private sendInteractNpc(npcInstanceId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const data = JSON.stringify({ npc_id: npcInstanceId, action: 'talk' });
+    this.connRef.socket.sendMatchState(this.matchId, Op.INTERACT_NPC, data).catch((err) => {
+      console.warn('sendMatchState INTERACT_NPC failed', err);
+    });
+  }
+
+  private sendDialogChoose(optionId: string): void {
+    if (!this.connRef || !this.matchId || !this.dialogPanel) return;
+    const dialogId = this.dialogPanel.getCurrentDialogId();
+    const nodeId = this.dialogPanel.getCurrentNodeId();
+    if (!dialogId || !nodeId) return;
+    const data = JSON.stringify({
+      dialog_id: dialogId,
+      node_id: nodeId,
+      option_id: optionId,
+    });
+    this.connRef.socket.sendMatchState(this.matchId, Op.DIALOG_CHOOSE, data).catch((err) => {
+      console.warn('sendMatchState DIALOG_CHOOSE failed', err);
+    });
+  }
+
+  private sendDialogClose(): void {
+    this.dialogPanel?.hide();
+    if (!this.connRef || !this.matchId) return;
+    this.connRef.socket.sendMatchState(this.matchId, Op.DIALOG_CLOSE, '{}').catch((err) => {
+      console.warn('sendMatchState DIALOG_CLOSE failed', err);
+    });
+  }
+
   private sendInteractObject(dropId: string): void {
     if (!this.connRef || !this.matchId) return;
     const payload = JSON.stringify({ object_id: dropId, action: 'pickup' });
@@ -785,9 +968,11 @@ export class WorldScene extends Phaser.Scene {
     this.inventoryPanel?.destroy();
     this.equipmentPanel?.destroy();
     this.skillPanel?.destroy();
+    this.dialogPanel?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
     this.skillPanel = undefined;
+    this.dialogPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;
@@ -796,6 +981,8 @@ export class WorldScene extends Phaser.Scene {
     this.equipment = [];
     this.skilly = [];
     this.atributy = [];
+    this.pendingNpcInteract = null;
+    this.lastNpcInteractSentAt = 0;
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;

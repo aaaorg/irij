@@ -1,0 +1,41 @@
+[
+  {
+    "id": "npc.kovar_blatiny",
+    "name_cs": "Starý Kovář",
+    "display_name_cs": "Starý Kovář",
+    "appearance_id": "sprite.npc.kovar_blatiny",
+    "default_position": { "x": 27, "y": 25 },
+    "flags": {
+      "talkable": true,
+      "merchant": true,
+      "quest_giver": false,
+      "master": false,
+      "crafter": false,
+      "attackable": false,
+      "pickpocketable": false
+    },
+    "dialog_id": "kovar_blatiny",
+    "village_id": "village.blatiny",
+    "merchant_table_id": "merchant.kovar_blatiny",
+    "pickpocket_loot_table_id": null,
+    "pickpocket_difficulty": 0
+  },
+  {
+    "id": "npc.selka_hospoda",
+    "name_cs": "Selka Hana",
+    "display_name_cs": "Selka",
+    "appearance_id": "sprite.npc.selka",
+    "default_position": { "x": 22, "y": 27 },
+    "flags": {
+      "talkable": true,
+      "merchant": false,
+      "quest_giver": false,
+      "master": false,
+      "crafter": false,
+      "attackable": false,
+      "pickpocketable": false
+    },
+    "dialog_id": "selka",
+    "village_id": "village.blatiny"
+  }
+]

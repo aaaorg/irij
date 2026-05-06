@@ -48,6 +48,10 @@ function makeState(presences: Record<string, PlayerPresenceState>): WorldMatchSt
     dropsByChunk: {},
     combatEngagements: {},
     interactRequestLog: {},
+    npcDefinitions: {},
+    npcInstances: {},
+    npcsByChunk: {},
+    dialogSessions: {},
   };
 }
 
