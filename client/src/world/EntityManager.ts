@@ -103,14 +103,18 @@ export class EntityManager {
     this.npcTilePositions.set(entity.id, { x, y });
   }
 
-  // Returns the npc instanceId if any NPC occupies the given tile (Chebyshev ≤ 2).
+  // Returns the npc instanceId if a NPC occupies exactly the given tile.
+  // Used for click-to-talk routing — exact-tile match nutí navigaci k NPC,
+  // ne fake "interact from across the map" jako broader Chebyshev oblast.
   findNpcAtTile(tileX: number, tileY: number): string | null {
     for (const [npcId, pos] of this.npcTilePositions) {
-      if (Math.abs(pos.x - tileX) <= 2 && Math.abs(pos.y - tileY) <= 2) {
-        return npcId;
-      }
+      if (pos.x === tileX && pos.y === tileY) return npcId;
     }
     return null;
+  }
+
+  getNpcPosition(instanceId: string): { x: number; y: number } | undefined {
+    return this.npcTilePositions.get(instanceId);
   }
 
   spawnDrop(entity: WorldSnapshotEntity): void {

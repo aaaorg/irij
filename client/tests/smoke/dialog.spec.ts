@@ -86,14 +86,41 @@ test('dialog: open NPC dialog → click option → close', async ({ page }) => {
   await expect(dialogPanel).toBeAttached({ timeout: 5_000 });
   await expect(dialogPanel).toBeHidden();
 
-  // 8) Trigger INTERACT_NPC programmatically (click projection through Phaser
-  //    is brittle; sending the match-state directly tests server roundtrip).
-  await page.evaluate(() => {
+  // 8) Skutečný pixel klik na NPC tile — testuje celý flow
+  //    findNpcAtTile → handleNpcClick → MOVE_REQUEST approach →
+  //    movement complete → INTERACT_NPC → DIALOG_OPEN. JS injection
+  //    by tento bug obejde (Phase 9 původní test ho přesně proto missnul).
+  const npcWorldClick = await page.evaluate(() => {
     const g = (window as any).__irijGame;
     const ws = g.scene.getScene('WorldScene');
-    // sendInteractNpc is private; use square-bracket access via the JS reflection.
-    ws['sendInteractNpc']('npc.kovar_blatiny');
+    const em = ws.entities;
+    // Specificky kovář — selka je dialogově triviální, kovář dává brusek.
+    let kovarId: string | null = null;
+    for (const [id, sprite] of em.npcSprites.entries()) {
+      if (sprite.getData('npcId') === 'npc.kovar_blatiny') {
+        kovarId = id as string;
+        break;
+      }
+    }
+    const npcId = kovarId ?? (Array.from(em.npcSprites.keys())[0] as string);
+    const npcPos = em.getNpcPosition(npcId);
+    // Iso projekce inline (TILE_W_PX=64, TILE_H_PX=32 — 2:1 dimetric per ADR-018).
+    const TILE_W = 64;
+    const TILE_H = 32;
+    const wx = (npcPos.x - npcPos.y) * (TILE_W / 2) + TILE_W / 2;
+    const wy = (npcPos.x + npcPos.y) * (TILE_H / 2) + TILE_H / 2;
+    const cam = ws.cameras.main;
+    const sx = (wx - cam.scrollX) * cam.zoom;
+    const sy = (wy - cam.scrollY) * cam.zoom;
+    return { sx, sy, npcId, npcPos };
   });
+
+  const canvasBox = await canvas.boundingBox();
+  expect(canvasBox).toBeTruthy();
+  await page.mouse.click(
+    canvasBox!.x + npcWorldClick.sx,
+    canvasBox!.y + npcWorldClick.sy,
+  );
 
   // 9) Dialog opens
   await expect(dialogPanel).toBeVisible({ timeout: 5_000 });

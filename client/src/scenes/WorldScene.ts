@@ -79,6 +79,10 @@ export class WorldScene extends Phaser.Scene {
   // Phase 9: dialog UI.
   private dialogPanel?: DialogPanel;
   private dialogEscKey?: Phaser.Input.Keyboard.Key;
+  // Klik na NPC z dálky → naviguj na adjacent tile + odešli INTERACT_NPC
+  // až bude hráč v range (analog `combat.pendingAttackTarget`).
+  private pendingNpcInteract: string | null = null;
+  private lastNpcInteractSentAt = 0;
 
   constructor() {
     super('WorldScene');
@@ -473,12 +477,18 @@ export class WorldScene extends Phaser.Scene {
   // === Game loop =========================================================
 
   override update(_time: number, _delta: number): void {
-    if (this.movement.moveStates.size === 0 && this.hpBars.size === 0) return;
+    if (
+      this.movement.moveStates.size === 0 &&
+      this.hpBars.size === 0 &&
+      this.pendingNpcInteract === null
+    )
+      return;
 
     const completed = this.movement.update();
     for (const id of completed) {
       if (id === this.selfUserId) {
         this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
+        this.tickNpcApproach();
       }
     }
 
@@ -489,6 +499,31 @@ export class WorldScene extends Phaser.Scene {
 
     if (this.combat.pendingAttackTarget) {
       this.combat.tick(this.connRef, this.matchId, () => this.nextSeq());
+    }
+    if (this.pendingNpcInteract) {
+      this.tickNpcApproach();
+    }
+  }
+
+  private tickNpcApproach(): void {
+    if (!this.pendingNpcInteract || !this.connRef || !this.matchId) return;
+    const npcId = this.pendingNpcInteract;
+    const npcPos = this.entities.getNpcPosition(npcId);
+    if (!npcPos) {
+      this.pendingNpcInteract = null;
+      return;
+    }
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(Math.abs(selfPos.x - npcPos.x), Math.abs(selfPos.y - npcPos.y));
+    // Server validuje Chebyshev ≤ 2 (NPC_INTERACT_RANGE_TILES). Klient
+    // zde drží stejnou hranici, aby nedošlo k MOVE_REQUEST → INTERACT_NPC →
+    // out-of-range silent drop.
+    if (cheb <= 2) {
+      const now = this.scene?.systems?.game?.loop?.time ?? performance.now();
+      if (now - this.lastNpcInteractSentAt < 500) return;
+      this.lastNpcInteractSentAt = now;
+      this.pendingNpcInteract = null;
+      this.sendInteractNpc(npcId);
     }
   }
 
@@ -504,10 +539,11 @@ export class WorldScene extends Phaser.Scene {
     const tile = screenToTile(pointer.worldX, pointer.worldY);
     if (!Number.isFinite(tile.x) || !Number.isFinite(tile.y)) return;
 
-    // NPC priority: if clicking near an NPC, start dialog.
+    // NPC priority: if clicking on an NPC tile, start dialog (navigovat
+    // se k němu, pokud jsme dál než server-side range, pak INTERACT_NPC).
     const npcId = this.entities.findNpcAtTile(tile.x, tile.y);
     if (npcId) {
-      this.sendInteractNpc(npcId);
+      this.handleNpcClick(npcId);
       return;
     }
 
@@ -771,6 +807,56 @@ export class WorldScene extends Phaser.Scene {
     this.dialogPanel?.hide();
   }
 
+  private handleNpcClick(npcInstanceId: string): void {
+    if (!this.connRef || !this.matchId) return;
+    const npcPos = this.entities.getNpcPosition(npcInstanceId);
+    if (!npcPos) return;
+
+    const selfPos = this.movement.selfTilePosition;
+    const cheb = Math.max(
+      Math.abs(selfPos.x - npcPos.x),
+      Math.abs(selfPos.y - npcPos.y),
+    );
+    // V range — pošli INTERACT_NPC rovnou. Combat pending zruš, ať se
+    // hráč nezačne během dialogu mlátit s mobem.
+    if (cheb <= 2) {
+      this.combat.cancelPendingAttack();
+      this.pendingNpcInteract = null;
+      this.sendInteractNpc(npcInstanceId);
+      return;
+    }
+
+    // Z dálky — navigovat na 4-cardinal adjacent tile (stejně jako combat
+    // approach), stash NPC ID, INTERACT_NPC pošleme v `tickNpcApproach`
+    // až po dokončení pohybu.
+    this.combat.cancelPendingAttack();
+    this.pendingNpcInteract = npcInstanceId;
+
+    const cardinalOffsets = [
+      { x: 0, y: -1 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 },
+    ];
+    let best = { x: npcPos.x, y: npcPos.y - 1 };
+    let bestDist = Infinity;
+    for (const off of cardinalOffsets) {
+      const tx = npcPos.x + off.x;
+      const ty = npcPos.y + off.y;
+      const d = Math.abs(selfPos.x - tx) + Math.abs(selfPos.y - ty);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { x: tx, y: ty };
+      }
+    }
+
+    const seq = this.nextSeq();
+    const payload = JSON.stringify({ target: best, client_seq: seq });
+    this.connRef.socket
+      .sendMatchState(this.matchId, Op.MOVE_REQUEST, payload)
+      .catch((err) => console.warn('sendMatchState MOVE_REQUEST (npc approach) failed', err));
+  }
+
   private sendInteractNpc(npcInstanceId: string): void {
     if (!this.connRef || !this.matchId) return;
     const data = JSON.stringify({ npc_id: npcInstanceId, action: 'talk' });
@@ -889,6 +975,8 @@ export class WorldScene extends Phaser.Scene {
     this.equipment = [];
     this.skilly = [];
     this.atributy = [];
+    this.pendingNpcInteract = null;
+    this.lastNpcInteractSentAt = 0;
 
     if (this.matchId && this.connRef) {
       const matchId = this.matchId;
