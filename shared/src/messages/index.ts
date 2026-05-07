@@ -9,3 +9,4 @@ export * from './xp.js';
 export * from './dialog.js';
 export * from './gathering.js';
 export * from './quest.js';
+export * from './jobBoard.js';

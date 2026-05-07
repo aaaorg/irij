@@ -14,7 +14,7 @@ export interface XpGain {
 
 // Op.XP_AWARDED (76) — server → killer (unicast).
 export interface XpAwarded {
-  source: 'mob_kill' | 'gather' | 'craft' | 'quest' | 'other';
+  source: 'mob_kill' | 'gather' | 'craft' | 'quest' | 'job' | 'other';
   source_id?: string; // např. mob.instanceId nebo recipe_id
   gains: XpGain[];
   total_xp_delta: number;

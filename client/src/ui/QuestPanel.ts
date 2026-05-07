@@ -7,6 +7,10 @@
 // questy individuálně přes QUEST_PROGRESS s event='advanced' v matchJoin).
 
 import type {
+  JobBoardTaskView,
+  JobBoardUpdated,
+  JobTaskCompleted,
+  JobTaskProgress,
   QuestCompleted,
   QuestProgress,
 } from 'irij-shared/messages';
@@ -27,14 +31,48 @@ interface CompletedQuestEntry {
   completedAt: string; // ISO from client receipt
 }
 
+// Phase 12: aktivní job board task — drží jen progress / submittable / view metadata.
+interface ActiveJobEntry {
+  taskId: string;
+  templateId: string;
+  titleCs: string;
+  descriptionCs: string;
+  view: JobBoardTaskView | null; // pokud máme plné view (z board open / updated)
+  progress: Record<string, number>;
+  submittable: boolean;
+}
+
+interface CompletedJobEntry {
+  taskId: string;
+  titleCs: string;
+  completedAt: string;
+}
+
+export interface QuestPanelCallbacks {
+  // Pro deliver_item job tasky — vrací count itemu v hráčově inventáři.
+  // Quest engine objective types tuto callback nepoužívají (kill_mob /
+  // interact_with_object / talk_to_npc mají progress přímo ze serveru).
+  getInventoryCount?: (itemId: string) => number;
+}
+
 export class QuestPanel {
   private readonly el: HTMLDivElement;
   private active = new Map<string, ActiveQuestEntry>();
   private completed = new Map<string, CompletedQuestEntry>();
+  private jobsActive = new Map<string, ActiveJobEntry>();
+  private jobsCompleted = new Map<string, CompletedJobEntry>();
+  private cb: QuestPanelCallbacks;
 
-  constructor() {
+  constructor(cb: QuestPanelCallbacks = {}) {
+    this.cb = cb;
     this.el = this.buildPanel();
     document.body.appendChild(this.el);
+  }
+
+  // Voláno z WorldScene po INVENTORY_CHANGED — refresh deliver_item progress
+  // counterů v jobs sekci.
+  onInventoryChanged(): void {
+    this.render();
   }
 
   private buildPanel(): HTMLDivElement {
@@ -69,6 +107,11 @@ export class QuestPanel {
     activeSection.style.cssText = 'margin-bottom: 12px;';
     panel.appendChild(activeSection);
 
+    const jobsSection = document.createElement('div');
+    jobsSection.id = 'irij-quests-jobs';
+    jobsSection.style.cssText = 'margin-bottom: 12px;';
+    panel.appendChild(jobsSection);
+
     const completedSection = document.createElement('div');
     completedSection.id = 'irij-quests-completed';
     panel.appendChild(completedSection);
@@ -89,6 +132,108 @@ export class QuestPanel {
     this.el.remove();
     this.active.clear();
     this.completed.clear();
+    this.jobsActive.clear();
+    this.jobsCompleted.clear();
+  }
+
+  // === Phase 12: job board state mirroring ============================
+
+  // Server pushed JOB_TASK_PROGRESS — fresh stav konkrétního tasku. Phase 12
+  // server vždy posílá title/description/objective v payloadu, takže panel
+  // má aktuální data i bez otevřeného boardu (po reconnectu, po take, po kill).
+  // 'expired'/'abandoned' eventy entry odstraní.
+  onJobProgress(payload: JobTaskProgress): void {
+    if (payload.event === 'expired' || payload.event === 'abandoned') {
+      this.jobsActive.delete(payload.task_id);
+      this.render();
+      return;
+    }
+    const existing = this.jobsActive.get(payload.task_id);
+    // Priority: payload.title (server always provides in Phase 12) >
+    // existing.view (z dříve přijatého JobBoardOpen) > existing.titleCs.
+    const titleCs =
+      payload.title?.cs ?? existing?.view?.title.cs ?? existing?.titleCs ?? payload.template_id;
+    const descriptionCs =
+      payload.description?.cs ?? existing?.view?.description.cs ?? existing?.descriptionCs ?? '';
+    // Build minimal view if we don't have one yet — to získá objective renderer
+    // přístup ke kill_mob counteru v renderJobs().
+    const view: JobBoardTaskView | null = existing?.view
+      ? {
+          ...existing.view,
+          self_progress: payload.progress,
+          self_submittable: payload.submittable,
+          taken_by_self: true,
+        }
+      : payload.title && payload.description && payload.objective
+        ? {
+            task_id: payload.task_id,
+            template_id: payload.template_id,
+            village_id: '',
+            type: payload.objective.type,
+            issuer_npc_id: '',
+            deliver_to_npc_id: '',
+            title: payload.title,
+            description: payload.description,
+            objective: payload.objective,
+            reward: { currency_denar: 0 },
+            max_concurrent_takers: 1,
+            current_takers: 1,
+            fulfilled_count: 0,
+            fulfilled_max: 1,
+            priority_bonus_multiplier: 1.0,
+            taken_by_self: true,
+            self_progress: payload.progress,
+            self_submittable: payload.submittable,
+          }
+        : null;
+    this.jobsActive.set(payload.task_id, {
+      taskId: payload.task_id,
+      templateId: payload.template_id,
+      titleCs,
+      descriptionCs,
+      view,
+      progress: payload.progress,
+      submittable: payload.submittable,
+    });
+    this.render();
+  }
+
+  // Pokud máme plný view payload (z board open / updated), použijeme ho —
+  // doplní popisek atd.
+  onJobBoardUpdated(payload: JobBoardUpdated): void {
+    for (const t of payload.added) this.applyJobView(t);
+    for (const t of payload.changed) this.applyJobView(t);
+    for (const id of payload.removed) {
+      // Pokud task ze světa zmizel a hráč ho má jako aktivní (např. expired
+      // nebo fulfilled_max), nech entry — server pošle abandon zvlášť.
+      const view = this.jobsActive.get(id);
+      if (view && !view.view?.taken_by_self) this.jobsActive.delete(id);
+    }
+    this.render();
+  }
+
+  applyJobView(view: JobBoardTaskView): void {
+    if (!view.taken_by_self) return; // panel zobrazuje jen aktivní hráčovy
+    const entry: ActiveJobEntry = {
+      taskId: view.task_id,
+      templateId: view.template_id,
+      titleCs: view.title.cs,
+      descriptionCs: view.description.cs,
+      view,
+      progress: view.self_progress ?? {},
+      submittable: view.self_submittable,
+    };
+    this.jobsActive.set(view.task_id, entry);
+  }
+
+  onJobCompleted(payload: JobTaskCompleted): void {
+    this.jobsActive.delete(payload.task_id);
+    this.jobsCompleted.set(payload.task_id, {
+      taskId: payload.task_id,
+      titleCs: payload.title.cs,
+      completedAt: new Date().toISOString(),
+    });
+    this.render();
   }
 
   // Server-pushed update — buď started (fresh quest) nebo advanced (kroku
@@ -128,7 +273,53 @@ export class QuestPanel {
 
   private render(): void {
     this.renderActive();
+    this.renderJobs();
     this.renderCompleted();
+  }
+
+  private renderJobs(): void {
+    const sec = document.getElementById('irij-quests-jobs');
+    if (!sec) return;
+    sec.innerHTML = '';
+
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size: 11px; color: #c8a86a; margin-bottom: 4px; border-top: 1px solid #3d2418; padding-top: 6px;';
+    heading.textContent = `Hospodské úkoly (${this.jobsActive.size})`;
+    sec.appendChild(heading);
+
+    if (this.jobsActive.size === 0) return;
+
+    for (const entry of this.jobsActive.values()) {
+      const obj = entry.view?.objective;
+      // Lokální vyhodnocení submittable — pro deliver_item ignorujeme server flag
+      // a počítáme z aktuálního inventáře (server self_submittable z view je
+      // pro deliver_item vždy false).
+      const submittable =
+        obj?.type === 'deliver_item' && this.cb.getInventoryCount
+          ? this.cb.getInventoryCount(obj.target) >= obj.count
+          : entry.submittable;
+
+      const wrap = document.createElement('div');
+      wrap.style.cssText = `margin: 4px 0; padding: 4px 8px; background: rgba(40,24,12,0.7); border-left: 2px solid ${submittable ? '#6e9c4e' : '#8a7a65'}; border-radius: 2px;`;
+      const t = document.createElement('div');
+      t.style.cssText = 'font-size: 11px; color: #f7e9c8;';
+      t.textContent = entry.titleCs;
+      wrap.appendChild(t);
+      if (obj) {
+        const meta = document.createElement('div');
+        meta.style.cssText = 'font-size: 10px; color: #8a7a65;';
+        if (obj.type === 'kill_mob') {
+          const have = entry.progress[`${obj.type}:${obj.target}`] ?? 0;
+          meta.textContent = `Zabít ${obj.target}: ${Math.min(have, obj.count)}/${obj.count}${submittable ? ' ✓' : ''}`;
+        } else {
+          // deliver_item: progress z inventory.
+          const inv = this.cb.getInventoryCount?.(obj.target) ?? 0;
+          meta.textContent = `Doručit ${obj.target}: ${Math.min(inv, obj.count)}/${obj.count}${submittable ? ' ✓ (jdi k zadavateli)' : ''}`;
+        }
+        wrap.appendChild(meta);
+      }
+      sec.appendChild(wrap);
+    }
   }
 
   private renderActive(): void {

@@ -31,6 +31,7 @@ import { getDialogTree, getNpcDef } from '../lib/dialogs.js';
 import { getItemDef } from '../lib/items.js';
 import { log } from '../lib/log.js';
 import { withOCCRetry } from '../lib/storage.js';
+import { sendJobBoardOpen } from './jobBoard.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
 import {
   changeReputation,
@@ -447,6 +448,18 @@ function applyDialogEffect(
           reason: result.reason,
         });
       }
+      break;
+    }
+    case 'open_job_board': {
+      // Resolve NPC the player is talking to as the issuer (MVP: NPC instance ID
+      // === NPC def ID).
+      const npc = state.npcInstances[npcInstanceId];
+      const issuerNpcId = npc ? npc.npcId : npcInstanceId;
+      sendJobBoardOpen(state, dispatcher, presence, effect.village_id, issuerNpcId);
+      logAudit(nk, 'dialog_open_job_board', {
+        userId,
+        payload: { village_id: effect.village_id, npc_id: issuerNpcId },
+      });
       break;
     }
     case 'complete_quest_step': {
