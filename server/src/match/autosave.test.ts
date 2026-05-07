@@ -64,6 +64,9 @@ function makeState(presences: Record<string, PlayerPresenceState>): WorldMatchSt
     questObjectsByChunk: {},
     playerQuestBlobs: {},
     playerQuestVersions: {},
+    jobBoardTasks: {},
+    jobBoardTasksByVillage: {},
+    jobBoardCounter: 0,
   };
 }
 

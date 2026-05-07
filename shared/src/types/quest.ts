@@ -5,6 +5,7 @@
 
 import type { Position } from './world.js';
 import type { DialogText } from './npc.js';
+import type { CompletedJobEntry, PlayerJobBoardEntry } from './jobBoard.js';
 
 // Objective types — viz docs/02d sekce "Objective types (MVP)".
 // MVP implementuje 3 typy potřebné pro "Synovec Starého Kováře":
@@ -81,6 +82,11 @@ export interface PlayerQuestBlob {
   completed: Record<string, { quest_id: string; completed_at: string }>;
   knowledge: string[]; // unique knowledge_id list
   reputation: Record<string, number>; // village_id → value (default 100)
+  // Phase 12: job board entries — sdílí blob (= jedna OCC retry zóna).
+  // Optional pro backward compat s pre-Phase-12 blob, narrowing helper
+  // doplní empty mapy.
+  jobs: Record<string, PlayerJobBoardEntry>;
+  jobs_completed: Record<string, CompletedJobEntry>;
 }
 
 export function asPlayerQuestBlob(value: unknown): PlayerQuestBlob | null {
@@ -91,7 +97,24 @@ export function asPlayerQuestBlob(value: unknown): PlayerQuestBlob | null {
   if (!v.completed || typeof v.completed !== 'object') return null;
   if (!Array.isArray(v.knowledge)) return null;
   if (!v.reputation || typeof v.reputation !== 'object') return null;
-  return value as PlayerQuestBlob;
+  // Phase 12 backward compat: doplň jobs / jobs_completed pro starší bloby.
+  const jobs =
+    v.jobs && typeof v.jobs === 'object' && !Array.isArray(v.jobs)
+      ? (v.jobs as PlayerQuestBlob['jobs'])
+      : {};
+  const jobsCompleted =
+    v.jobs_completed && typeof v.jobs_completed === 'object' && !Array.isArray(v.jobs_completed)
+      ? (v.jobs_completed as PlayerQuestBlob['jobs_completed'])
+      : {};
+  return {
+    schema_version: v.schema_version,
+    active: v.active as PlayerQuestBlob['active'],
+    completed: v.completed as PlayerQuestBlob['completed'],
+    knowledge: v.knowledge as string[],
+    reputation: v.reputation as Record<string, number>,
+    jobs,
+    jobs_completed: jobsCompleted,
+  };
 }
 
 export function emptyQuestBlob(): PlayerQuestBlob {
@@ -101,5 +124,7 @@ export function emptyQuestBlob(): PlayerQuestBlob {
     completed: {},
     knowledge: [],
     reputation: {},
+    jobs: {},
+    jobs_completed: {},
   };
 }

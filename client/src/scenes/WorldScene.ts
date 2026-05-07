@@ -15,6 +15,11 @@ import type {
   GatherProgress,
   HolsterAutopull,
   InventoryChanged,
+  JobBoardOpen,
+  JobBoardUpdated,
+  JobTaskCompleted,
+  JobTaskProgress,
+  JobTaskRejected,
   LevelUp,
   MoveRejected,
   QuestCompleted,
@@ -50,6 +55,7 @@ import { DialogPanel } from '../ui/DialogPanel.js';
 import { CraftingPanel, CRAFTING_RECIPES } from '../ui/CraftingPanel.js';
 import { GatherProgressBar } from '../ui/GatherProgressBar.js';
 import { QuestPanel } from '../ui/QuestPanel.js';
+import { JobBoardPanel } from '../ui/JobBoardPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -106,6 +112,9 @@ export class WorldScene extends Phaser.Scene {
   private questToggleKey?: Phaser.Input.Keyboard.Key;
   private pendingQuestObjectId: string | null = null;
   private lastQuestObjectSentAt = 0;
+
+  // Phase 12: job board overlay (otevírá se z dialog effectu open_job_board).
+  private jobBoardPanel?: JobBoardPanel;
 
   constructor() {
     super('WorldScene');
@@ -282,6 +291,21 @@ export class WorldScene extends Phaser.Scene {
           break;
         case Op.QUEST_COMPLETED:
           this.handleQuestCompleted(payload as QuestCompleted);
+          break;
+        case Op.JOB_BOARD_OPEN:
+          this.handleJobBoardOpen(payload as JobBoardOpen);
+          break;
+        case Op.JOB_BOARD_UPDATED:
+          this.handleJobBoardUpdated(payload as JobBoardUpdated);
+          break;
+        case Op.JOB_TASK_PROGRESS:
+          this.handleJobTaskProgress(payload as JobTaskProgress);
+          break;
+        case Op.JOB_TASK_COMPLETED:
+          this.handleJobTaskCompleted(payload as JobTaskCompleted);
+          break;
+        case Op.JOB_TASK_REJECTED:
+          this.handleJobTaskRejected(payload as JobTaskRejected);
           break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
@@ -770,10 +794,129 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private buildQuestUI(): void {
-    this.questPanel = new QuestPanel();
+    this.questPanel = new QuestPanel({
+      getInventoryCount: (itemId: string) => this.countInventoryItem(itemId),
+    });
     if (this.input.keyboard) {
       this.questToggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
       this.questToggleKey.on('down', () => this.questPanel?.toggle());
+    }
+  }
+
+  private ensureJobBoardPanel(): JobBoardPanel | undefined {
+    if (this.jobBoardPanel) return this.jobBoardPanel;
+    if (!this.connRef || !this.matchId) return undefined;
+    this.jobBoardPanel = new JobBoardPanel({
+      conn: this.connRef,
+      matchId: this.matchId,
+      getInventoryCount: (itemId: string) => this.countInventoryItem(itemId),
+    });
+    return this.jobBoardPanel;
+  }
+
+  // Phase 12: spočte aktuální počet `itemId` ve hráčově inventáři. Používá
+  // se pro deliver_item job objective progress (klient ho počítá lokálně,
+  // server posílá per-tick aktualizace přes JOB_TASK_PROGRESS jen pro
+  // server-tracked progress = kill_mob).
+  private countInventoryItem(itemId: string): number {
+    let total = 0;
+    for (const slot of this.inventory) {
+      if (slot && slot.item_id === itemId) total += slot.quantity;
+    }
+    return total;
+  }
+
+  private handleJobBoardOpen(payload: JobBoardOpen): void {
+    if (!payload) return;
+    // Zavři dialog před otevřením boardu (open_job_board dialog effect dodává
+    // option.next: null ⇒ DIALOG_CLOSE přijde také, ale order není garantovaný
+    // a bez explicit hide by se panely mohly krátce překrývat).
+    this.dialogPanel?.hide();
+    const panel = this.ensureJobBoardPanel();
+    panel?.onOpen(payload);
+    // Mirror task views do questPanel pro aktivní entry.
+    for (const view of payload.tasks) {
+      if (view.taken_by_self) this.questPanel?.applyJobView(view);
+    }
+  }
+
+  private handleJobBoardUpdated(payload: JobBoardUpdated): void {
+    if (!payload) return;
+    this.jobBoardPanel?.onUpdated(payload);
+    this.questPanel?.onJobBoardUpdated(payload);
+  }
+
+  private handleJobTaskProgress(payload: JobTaskProgress): void {
+    if (!payload) return;
+    this.jobBoardPanel?.onTaskProgress(payload);
+    this.questPanel?.onJobProgress(payload);
+
+    // Toast podle event typu — UX feedback že server akci přijal.
+    const titleCs = payload.title?.cs ?? payload.template_id;
+    if (payload.event === 'taken') {
+      showToast(this, `Úkol přijat: ${titleCs}`, '#aabbff');
+    } else if (payload.event === 'abandoned') {
+      showToast(this, `Úkol zrušen: ${titleCs}`, '#c8a86a');
+    } else if (payload.event === 'expired') {
+      showToast(this, `Úkol vypršel: ${titleCs}`, '#ff9c6e');
+    } else if (payload.event === 'progress' && payload.submittable) {
+      // Hraniční tick — kill_mob counter právě dosáhl count, hráč může submit.
+      showToast(this, `Úkol připraven: ${titleCs}`, '#88dd88');
+    }
+  }
+
+  private handleJobTaskCompleted(payload: JobTaskCompleted): void {
+    if (!payload) return;
+    this.jobBoardPanel?.onTaskCompleted(payload);
+    this.questPanel?.onJobCompleted(payload);
+    showToast(this, `Úkol splněn: ${payload.title.cs}`, '#88dd88');
+    if (payload.reward.currency_denar > 0) {
+      showToast(this, `+${payload.reward.currency_denar} denárů`, '#c8a86a');
+    }
+  }
+
+  private handleJobTaskRejected(payload: JobTaskRejected): void {
+    if (!payload) return;
+    showToast(this, this.formatJobRejectReason(payload), '#ff5555');
+  }
+
+  private formatJobRejectReason(payload: JobTaskRejected): string {
+    const verb =
+      payload.action === 'take'
+        ? 'Vzít úkol'
+        : payload.action === 'submit'
+          ? 'Odevzdat úkol'
+          : payload.action === 'abandon'
+            ? 'Zrušit úkol'
+            : 'Otevřít board';
+    switch (payload.reason) {
+      case 'unknown_task':
+        return `${verb}: úkol už neexistuje.`;
+      case 'task_full':
+        return `${verb}: úkol je obsazen, zkus jiný.`;
+      case 'already_taken':
+        return `${verb}: úkol už máš v deníku.`;
+      case 'not_taken':
+        return `${verb}: tento úkol nemáš vzatý.`;
+      case 'out_of_range':
+        return `${verb}: musíš stát u zadavatele.`;
+      case 'no_issuer_in_range':
+        return `${verb}: žádný zadavatel v dosahu.`;
+      case 'inventory_short': {
+        const d = payload.detail;
+        if (d?.item_id && typeof d.need === 'number' && typeof d.have === 'number') {
+          return `${verb}: chybí ti ${d.need - d.have}× ${d.item_id} (máš ${d.have}/${d.need}).`;
+        }
+        return `${verb}: nemáš dost položek v inventáři.`;
+      }
+      case 'objective_not_met':
+        return `${verb}: úkol ještě není splněn.`;
+      case 'task_expired':
+        return `${verb}: úkol mezitím vypršel.`;
+      case 'rate_limited':
+        return `${verb}: moc rychle — zkus to za chvíli.`;
+      default:
+        return `${verb}: nepovedlo se (${payload.reason}).`;
     }
   }
 
@@ -933,6 +1076,12 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     this.inventoryPanel?.applyChanges(payload.changes);
+
+    // Phase 12: re-render job/quest panely — deliver_item submittable se
+    // počítá z aktuálního inventáře, takže sebrání/zahození itemu může
+    // okamžitě odemknout/zamknout „Vyzvednout odměnu" tlačítko.
+    this.jobBoardPanel?.onInventoryChanged();
+    this.questPanel?.onInventoryChanged();
   }
 
   private handleEquipmentChanged(payload: EquipmentChanged): void {
@@ -1355,6 +1504,7 @@ export class WorldScene extends Phaser.Scene {
     this.craftingPanel?.destroy();
     this.gatherBar?.destroy();
     this.questPanel?.destroy();
+    this.jobBoardPanel?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
     this.skillPanel = undefined;
@@ -1362,6 +1512,7 @@ export class WorldScene extends Phaser.Scene {
     this.craftingPanel = undefined;
     this.gatherBar = undefined;
     this.questPanel = undefined;
+    this.jobBoardPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;

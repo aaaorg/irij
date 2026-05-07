@@ -1,0 +1,117 @@
+[
+  {
+    "template_id": "blatiny.deliver_bones",
+    "village_id": "village.blatiny",
+    "issuer_npc_id": "npc.selka_hospoda",
+    "deliver_to_npc_id": "npc.selka_hospoda",
+    "title": {
+      "cs": "Selka potřebuje kosti",
+      "en": "Innkeeper needs bones"
+    },
+    "description": {
+      "cs": "Selka Hana sbírá kosti pro vývar. Přines jí 5 kostí ze zvířat.",
+      "en": "Innkeeper Hana collects bones for soup. Bring her 5 animal bones."
+    },
+    "objective": { "type": "deliver_item", "target": "material.bone", "count": 5 },
+    "reward": {
+      "currency_denar": 60,
+      "xp": { "hunting": 150 },
+      "reputation": { "village.blatiny": 10 }
+    },
+    "max_concurrent_takers": 5,
+    "fulfilled_max": 10,
+    "weight": 3
+  },
+  {
+    "template_id": "blatiny.deliver_flint",
+    "village_id": "village.blatiny",
+    "issuer_npc_id": "npc.selka_hospoda",
+    "deliver_to_npc_id": "npc.selka_hospoda",
+    "title": {
+      "cs": "Pazourky pro kovárnu",
+      "en": "Flint for the smithy"
+    },
+    "description": {
+      "cs": "Kovář potřebuje pazourky na brusky. Vytěž 8 pazourku z kamenolomu.",
+      "en": "The smith needs flint for whetstones. Mine 8 flint from the quarry."
+    },
+    "objective": { "type": "deliver_item", "target": "material.stone.flint", "count": 8 },
+    "reward": {
+      "currency_denar": 50,
+      "xp": { "mining": 120 },
+      "reputation": { "village.blatiny": 5 }
+    },
+    "max_concurrent_takers": 5,
+    "fulfilled_max": 10,
+    "weight": 3
+  },
+  {
+    "template_id": "blatiny.deliver_oak",
+    "village_id": "village.blatiny",
+    "issuer_npc_id": "npc.selka_hospoda",
+    "deliver_to_npc_id": "npc.selka_hospoda",
+    "title": {
+      "cs": "Dřevo na zimu",
+      "en": "Wood for winter"
+    },
+    "description": {
+      "cs": "Hospoda potřebuje topit. Přines 4 dubová dřeva z lesa.",
+      "en": "The inn needs heating. Bring 4 oak logs from the forest."
+    },
+    "objective": { "type": "deliver_item", "target": "material.wood.oak", "count": 4 },
+    "reward": {
+      "currency_denar": 80,
+      "xp": { "woodcutting": 180 },
+      "reputation": { "village.blatiny": 8 }
+    },
+    "max_concurrent_takers": 5,
+    "fulfilled_max": 10,
+    "weight": 2
+  },
+  {
+    "template_id": "blatiny.kill_rats",
+    "village_id": "village.blatiny",
+    "issuer_npc_id": "npc.selka_hospoda",
+    "deliver_to_npc_id": "npc.selka_hospoda",
+    "title": {
+      "cs": "Krysy ve sklepě",
+      "en": "Rats in the cellar"
+    },
+    "description": {
+      "cs": "Selku trápí krysy u zásob. Sraz 3 obří krysy v okolí vesnice.",
+      "en": "Rats threaten the innkeeper's stores. Slay 3 giant rats near the village."
+    },
+    "objective": { "type": "kill_mob", "target": "mob.giant_rat", "count": 3 },
+    "reward": {
+      "currency_denar": 100,
+      "xp": { "melee": 300 },
+      "reputation": { "village.blatiny": 12 }
+    },
+    "max_concurrent_takers": 5,
+    "fulfilled_max": 8,
+    "weight": 3
+  },
+  {
+    "template_id": "blatiny.kill_wolves",
+    "village_id": "village.blatiny",
+    "issuer_npc_id": "npc.selka_hospoda",
+    "deliver_to_npc_id": "npc.selka_hospoda",
+    "title": {
+      "cs": "Vlci v lese",
+      "en": "Wolves in the woods"
+    },
+    "description": {
+      "cs": "Stráže prosí o pomoc. Sraz 2 vlky v Hvozdu.",
+      "en": "The guards ask for help. Slay 2 wolves in the woods."
+    },
+    "objective": { "type": "kill_mob", "target": "mob.wolf", "count": 2 },
+    "reward": {
+      "currency_denar": 200,
+      "xp": { "melee": 500 },
+      "reputation": { "village.blatiny": 18 }
+    },
+    "max_concurrent_takers": 3,
+    "fulfilled_max": 6,
+    "weight": 2
+  }
+]

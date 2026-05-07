@@ -25,6 +25,7 @@ import type {
   AtributRow,
   AtributSourceRow,
   CraftStationDefinition,
+  JobBoardTask,
   LootTable,
   MobDefinition,
   NpcDefinition,
@@ -192,6 +193,14 @@ export interface WorldMatchState {
   // do PLAYER_QUESTS storage. Per-player versionString cached pro CAS.
   playerQuestBlobs: { [userId: string]: PlayerQuestBlob };
   playerQuestVersions: { [userId: string]: string };
+  // Phase 12: job board — sdílený pool tasků v daném village. MVP ukládá jen
+  // v match state (bez Storage perzistence — server restart = fresh pool).
+  // `jobBoardCounter` pro ID-generaci v MVP (post-MVP nahradíme UUID).
+  jobBoardTasks: { [taskId: string]: JobBoardTask };
+  jobBoardTasksByVillage: { [villageId: string]: { [taskId: string]: true } };
+  jobBoardCounter: number;
+  // Per-player rate limit log pro JOB_BOARD_OPEN_REQUEST + take/submit/abandon
+  // — sdílí interactRequestLog bucket, takže neopakujeme.
 }
 
 export function chunkKeyOf(pos: Position): string {

@@ -5,3 +5,4 @@ export * from './mob.js';
 export * from './npc.js';
 export * from './gathering.js';
 export * from './quest.js';
+export * from './jobBoard.js';

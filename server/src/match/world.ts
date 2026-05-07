@@ -3,6 +3,7 @@ import {
   COMBAT_TICK_INTERVAL,
   DEFAULT_HP,
   DEFAULT_SPAWN_POSITION,
+  JOB_BOARD_GENERATION_INTERVAL,
   MOB_RESPAWN_CHECK_INTERVAL,
   MOVEMENT_SPEED_TPS_BASE,
   PLAYER_AUTOSAVE_INTERVAL,
@@ -41,6 +42,16 @@ import { log } from '../lib/log.js';
 import { getAllNpcs } from '../lib/dialogs.js';
 import { getAllQuestObjects } from '../lib/quests.js';
 import { getAllCraftStations, getAllResourceNodeDefs } from '../lib/recipes.js';
+import {
+  cleanupOrphanJobs,
+  handleJobBoardOpenRequest,
+  handleJobTaskAbandon,
+  handleJobTaskSubmit,
+  handleJobTaskTaken,
+  runJobBoardGenerationTick,
+  seedInitialJobBoard,
+  sendActiveJobsSnapshot,
+} from './jobBoard.js';
 import { savePlayersState } from './autosave.js';
 import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
 import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
@@ -264,7 +275,18 @@ export function matchInit(
     questObjectsByChunk: questObjectsByChunkInit,
     playerQuestBlobs: {},
     playerQuestVersions: {},
+    jobBoardTasks: {},
+    jobBoardTasksByVillage: {},
+    jobBoardCounter: 0,
   };
+
+  // Phase 12: seed initial job board pool. Tick=0 v matchInit; další refill
+  // přijde z runJobBoardGenerationTick každých JOB_BOARD_GENERATION_INTERVAL.
+  seedInitialJobBoard(state, 0);
+  log(logger, 'info', 'Job board seeded', {
+    tasks: Object.keys(state.jobBoardTasks).length,
+  });
+
   return {
     state,
     tickRate: TICK_HZ,
@@ -361,6 +383,22 @@ export function matchJoin(
     const questLoad = loadPlayerQuestBlob(nk, logger, userId);
     state.playerQuestBlobs = { ...state.playerQuestBlobs, [userId]: questLoad.blob };
     state.playerQuestVersions = { ...state.playerQuestVersions, [userId]: questLoad.version };
+
+    // Phase 12: re-attach takers — pokud má hráč v blobu aktivní jobs, doplň ho
+    // zpět do taker_user_ids existujících tasků. Po restartu serveru nebo
+    // fulfilled_max expiraci jsou některé task IDs v blobu orphan; ty
+    // `cleanupOrphanJobs` (níže) odstraní + pošle klientu 'expired' event.
+    for (const taskId of Object.keys(questLoad.blob.jobs)) {
+      const task = state.jobBoardTasks[taskId];
+      if (!task) continue;
+      if (task.taker_user_ids.includes(userId)) continue;
+      const updated = {
+        ...task,
+        current_takers: task.current_takers + 1,
+        taker_user_ids: [...task.taker_user_ids, userId],
+      };
+      state.jobBoardTasks = { ...state.jobBoardTasks, [taskId]: updated };
+    }
 
     const visibleEntities: WorldSnapshotEntity[] = [];
     const recipientsInArea = recipientsInRangeOfChunk(state, lastChunk);
@@ -523,6 +561,11 @@ export function matchJoin(
     // Phase 11: send active quest snapshot — klient zinicializuje quest log UI.
     sendActiveQuestsSnapshot(dispatcher, presence, questLoad.blob);
 
+    // Phase 12: orphan cleanup — vyčistí blob.jobs entries s expired task IDs
+    // (server restart / fulfilled_max). Pak pošle snapshot validních jobů.
+    const cleanBlob = cleanupOrphanJobs(state, nk, logger, dispatcher, presence, questLoad.blob);
+    sendActiveJobsSnapshot(state, dispatcher, presence, cleanBlob);
+
     log(logger, 'info', 'matchJoin', {
       displayName,
       userId: userId.slice(0, 8),
@@ -602,6 +645,21 @@ export function matchLeave(
       state.playerQuestVersions = next;
     }
 
+    // Phase 12: na disconnect uvolnit slot u všech tasků, kde byl user takerem.
+    // current_takers reflektuje aktuálně připojené hráče (offline = volný slot).
+    // Hráč si entry drží v PlayerQuestBlob, znovu se přiřadí při příštím joinu.
+    for (const taskId of Object.keys(state.jobBoardTasks)) {
+      const task = state.jobBoardTasks[taskId];
+      if (!task) continue;
+      if (!task.taker_user_ids.includes(userId)) continue;
+      const updated = {
+        ...task,
+        current_takers: Math.max(0, task.current_takers - 1),
+        taker_user_ids: task.taker_user_ids.filter((id) => id !== userId),
+      };
+      state.jobBoardTasks = { ...state.jobBoardTasks, [taskId]: updated };
+    }
+
     // Release mob targeting this player
     for (const instanceId of Object.keys(state.mobInstances)) {
       const mob = state.mobInstances[instanceId];
@@ -675,6 +733,14 @@ export function matchLoop(
       handleGatherResource(state, logger, nk, dispatcher, msg.sender, text, tick);
     } else if (msg.opCode === Op.CRAFT_REQUEST) {
       handleCraftRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.JOB_BOARD_OPEN_REQUEST) {
+      handleJobBoardOpenRequest(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.JOB_TASK_TAKEN) {
+      handleJobTaskTaken(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.JOB_TASK_SUBMIT) {
+      handleJobTaskSubmit(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.JOB_TASK_ABANDON) {
+      handleJobTaskAbandon(state, logger, nk, dispatcher, msg.sender, text, tick);
     }
   }
 
@@ -699,6 +765,11 @@ export function matchLoop(
 
   if (tick > 0 && tick % RESOURCE_RESPAWN_CHECK_INTERVAL === 0) {
     checkResourceNodeRespawns(state, dispatcher, tick);
+  }
+
+  // Phase 12: job board generation tick (refill + aging).
+  if (tick > 0 && tick % JOB_BOARD_GENERATION_INTERVAL === 0) {
+    runJobBoardGenerationTick(state, dispatcher, tick);
   }
 
   if (tick > 0 && tick % PLAYER_AUTOSAVE_INTERVAL === 0) {

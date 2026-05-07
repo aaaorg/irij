@@ -21,6 +21,7 @@ import { int, obj, parse, str } from 'irij-shared';
 import { log } from '../lib/log.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
 import { progressObjective } from './quest.js';
+import { progressJobObjectivesKillMob } from './jobBoard.js';
 import { awardXp } from './xp.js';
 import {
   addDropToChunk,
@@ -291,6 +292,9 @@ function handleMobDeath(
       type: 'kill_mob',
       mob_id: mob.mobId,
     });
+
+    // Phase 12: job board kill_mob progression.
+    progressJobObjectivesKillMob(state, nk, logger, dispatcher, killerPresence, mob.mobId);
   }
 
   const respawnTicks = randomInt(def.respawn_min_s, def.respawn_max_s) * TICK_HZ;
