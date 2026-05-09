@@ -9,6 +9,10 @@ export const AI_TICK_INTERVAL = 5; // 5 master ticks = 500 ms
 export const RESOURCE_RESPAWN_CHECK_INTERVAL = 150; // 15 s
 export const PLAYER_AUTOSAVE_INTERVAL = 300; // 30 s
 export const JOB_BOARD_GENERATION_INTERVAL = 18000; // 30 min
+// Phase 13: shop stock respawn — interval, kdy se na backendu doplňuje stock
+// per merchant table proporcionálně podle `respawn_per_hour`. 15 min
+// odpovídá designu v docs/02e sekce 1 (Stock respawn mechanika).
+export const SHOP_STOCK_RESPAWN_INTERVAL = 9000; // 15 min @ 10 Hz
 
 // Movement
 export const MOVEMENT_SPEED_TPS_BASE = 3; // tiles per second

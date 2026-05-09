@@ -8,6 +8,7 @@ import {
   MOVEMENT_SPEED_TPS_BASE,
   PLAYER_AUTOSAVE_INTERVAL,
   RESOURCE_RESPAWN_CHECK_INTERVAL,
+  SHOP_STOCK_RESPAWN_INTERVAL,
   STORAGE_COLLECTIONS,
   TICK_HZ,
 } from 'irij-shared/constants';
@@ -52,6 +53,12 @@ import {
   seedInitialJobBoard,
   sendActiveJobsSnapshot,
 } from './jobBoard.js';
+import {
+  handleShopBuy,
+  handleShopSell,
+  runShopStockRespawn,
+  seedMerchantTables,
+} from './shop.js';
 import { savePlayersState } from './autosave.js';
 import { runAiTick, checkMobRespawns, advanceMobMovement } from './ai.js';
 import { handleAttackRequest, runCombatTick, cleanupExpiredDrops } from './combat.js';
@@ -278,7 +285,14 @@ export function matchInit(
     jobBoardTasks: {},
     jobBoardTasksByVillage: {},
     jobBoardCounter: 0,
+    merchantStates: {},
   };
+
+  // Phase 13: seed merchant runtime stock z merchant_tables.json.
+  seedMerchantTables(state);
+  log(logger, 'info', 'Merchant tables seeded', {
+    tables: Object.keys(state.merchantStates).length,
+  });
 
   // Phase 12: seed initial job board pool. Tick=0 v matchInit; další refill
   // přijde z runJobBoardGenerationTick každých JOB_BOARD_GENERATION_INTERVAL.
@@ -741,6 +755,10 @@ export function matchLoop(
       handleJobTaskSubmit(state, logger, nk, dispatcher, msg.sender, text, tick);
     } else if (msg.opCode === Op.JOB_TASK_ABANDON) {
       handleJobTaskAbandon(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.SHOP_BUY) {
+      handleShopBuy(state, logger, nk, dispatcher, msg.sender, text, tick);
+    } else if (msg.opCode === Op.SHOP_SELL) {
+      handleShopSell(state, logger, nk, dispatcher, msg.sender, text, tick);
     }
   }
 
@@ -770,6 +788,11 @@ export function matchLoop(
   // Phase 12: job board generation tick (refill + aging).
   if (tick > 0 && tick % JOB_BOARD_GENERATION_INTERVAL === 0) {
     runJobBoardGenerationTick(state, dispatcher, tick);
+  }
+
+  // Phase 13: shop stock respawn (15 min interval).
+  if (tick > 0 && tick % SHOP_STOCK_RESPAWN_INTERVAL === 0) {
+    runShopStockRespawn(state, tick);
   }
 
   if (tick > 0 && tick % PLAYER_AUTOSAVE_INTERVAL === 0) {

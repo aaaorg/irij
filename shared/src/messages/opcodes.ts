@@ -76,6 +76,7 @@ export const Op = {
   SHOP_OPEN: 93,
   SHOP_BUY: 94,
   SHOP_SELL: 95,
+  SHOP_REJECTED: 96,
 
   // Worker / pickpocket (100-109)
   WORKER_HIRE: 100,

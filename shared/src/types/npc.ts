@@ -45,7 +45,8 @@ export type DialogEffect =
   | { type: 'change_reputation'; village_id: string; delta: number }
   | { type: 'start_quest'; quest_id: string }
   | { type: 'complete_quest_step'; quest_id: string; step_id: string }
-  | { type: 'open_job_board'; village_id: string };
+  | { type: 'open_job_board'; village_id: string }
+  | { type: 'open_shop'; merchant_table_id: string };
 
 // Visibility podmínka — všechny conditions musí být splněny aby se option zobrazila.
 // Phase 11 implementuje knowledge / reputation_min / quest_state gates proti

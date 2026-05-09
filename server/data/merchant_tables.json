@@ -1,0 +1,84 @@
+[
+  {
+    "id": "merchant.kovar_blatiny",
+    "owner_npc_id": "npc.kovar_blatiny",
+    "type": "specialist.smithing",
+    "sell_items": [
+      {
+        "item_id": "weapon.melee.dagger.bronze",
+        "sell_price_denar": 60,
+        "stock_max": 4,
+        "respawn_per_hour": 2
+      },
+      {
+        "item_id": "weapon.melee.sword.bronze",
+        "sell_price_denar": 120,
+        "stock_max": 3,
+        "respawn_per_hour": 1
+      },
+      {
+        "item_id": "weapon.melee.mace.bronze",
+        "sell_price_denar": 100,
+        "stock_max": 3,
+        "respawn_per_hour": 1
+      },
+      {
+        "item_id": "tool.pickaxe.bronze",
+        "sell_price_denar": 50,
+        "stock_max": 5,
+        "respawn_per_hour": 2
+      },
+      {
+        "item_id": "tool.axe.bronze",
+        "sell_price_denar": 50,
+        "stock_max": 5,
+        "respawn_per_hour": 2
+      },
+      {
+        "item_id": "tool.hammer",
+        "sell_price_denar": 40,
+        "stock_max": 5,
+        "respawn_per_hour": 2
+      },
+      {
+        "item_id": "consumable.whetstone.t1",
+        "sell_price_denar": 10,
+        "stock_max": 20,
+        "respawn_per_hour": 8
+      }
+    ],
+    "buy_items": [
+      { "item_id": "material.ore.iron", "buy_price_denar": 18, "buy_limit_per_day": 100 },
+      { "item_id": "material.ore.copper", "buy_price_denar": 8, "buy_limit_per_day": 100 },
+      { "item_id": "material.stone.flint", "buy_price_denar": 2, "buy_limit_per_day": 200 }
+    ]
+  },
+  {
+    "id": "merchant.selka_general",
+    "owner_npc_id": "npc.selka_hospoda",
+    "type": "general",
+    "sell_items": [
+      {
+        "item_id": "consumable.food.bread",
+        "sell_price_denar": 8,
+        "stock_max": 20,
+        "respawn_per_hour": 10
+      },
+      {
+        "item_id": "consumable.food.raw_meat",
+        "sell_price_denar": 3,
+        "stock_max": 10,
+        "respawn_per_hour": 4
+      }
+    ],
+    "buy_items": [
+      { "item_id": "material.ore.iron", "buy_price_denar": 10, "buy_limit_per_day": 50 },
+      { "item_id": "material.ore.copper", "buy_price_denar": 5, "buy_limit_per_day": 50 },
+      { "item_id": "material.stone.flint", "buy_price_denar": 1, "buy_limit_per_day": 100 },
+      { "item_id": "material.bone", "buy_price_denar": 2, "buy_limit_per_day": 100 },
+      { "item_id": "material.hide.wolf", "buy_price_denar": 7, "buy_limit_per_day": 50 },
+      { "item_id": "material.hide.rat", "buy_price_denar": 2, "buy_limit_per_day": 100 },
+      { "item_id": "material.wood.oak", "buy_price_denar": 4, "buy_limit_per_day": 100 }
+    ]
+  }
+]

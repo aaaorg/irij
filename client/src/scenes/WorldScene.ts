@@ -24,6 +24,8 @@ import type {
   MoveRejected,
   QuestCompleted,
   QuestProgress,
+  ShopOpen,
+  ShopRejected,
   WorldSnapshot,
   XpAwarded,
 } from 'irij-shared/messages';
@@ -56,6 +58,7 @@ import { CraftingPanel, CRAFTING_RECIPES } from '../ui/CraftingPanel.js';
 import { GatherProgressBar } from '../ui/GatherProgressBar.js';
 import { QuestPanel } from '../ui/QuestPanel.js';
 import { JobBoardPanel } from '../ui/JobBoardPanel.js';
+import { ShopPanel } from '../ui/ShopPanel.js';
 
 const MAP_KEY = 'mapTest';
 const TILESET_IMAGE_KEY = 'tilesetPlaceholder';
@@ -115,6 +118,9 @@ export class WorldScene extends Phaser.Scene {
 
   // Phase 12: job board overlay (otevírá se z dialog effectu open_job_board).
   private jobBoardPanel?: JobBoardPanel;
+
+  // Phase 13: shop overlay (otevírá se z dialog effectu open_shop).
+  private shopPanel?: ShopPanel;
 
   constructor() {
     super('WorldScene');
@@ -306,6 +312,12 @@ export class WorldScene extends Phaser.Scene {
           break;
         case Op.JOB_TASK_REJECTED:
           this.handleJobTaskRejected(payload as JobTaskRejected);
+          break;
+        case Op.SHOP_OPEN:
+          this.handleShopOpen(payload as ShopOpen);
+          break;
+        case Op.SHOP_REJECTED:
+          this.handleShopRejected(payload as ShopRejected);
           break;
         default:
           console.debug(`[match] unhandled op=${md.op_code}`);
@@ -920,6 +932,33 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private ensureShopPanel(): ShopPanel | undefined {
+    if (this.shopPanel) return this.shopPanel;
+    if (!this.connRef || !this.matchId) return undefined;
+    this.shopPanel = new ShopPanel({
+      conn: this.connRef,
+      matchId: this.matchId,
+      getInventoryCount: (itemId: string) => this.countInventoryItem(itemId),
+    });
+    return this.shopPanel;
+  }
+
+  private handleShopOpen(payload: ShopOpen): void {
+    if (!payload) return;
+    // open_shop dialog effect má option.next: null ⇒ DIALOG_CLOSE přijde také,
+    // ale order není garantovaný — explicitní hide dialogPanel preventně.
+    this.dialogPanel?.hide();
+    const panel = this.ensureShopPanel();
+    panel?.onOpen(payload);
+  }
+
+  private handleShopRejected(payload: ShopRejected): void {
+    if (!payload) return;
+    const panel = this.ensureShopPanel();
+    const text = panel ? panel.onRejected(payload) : `Obchod: ${payload.reason}`;
+    showToast(this, text, '#ff5555');
+  }
+
   private handleQuestProgress(payload: QuestProgress): void {
     if (!payload || !this.questPanel) return;
     this.questPanel.onProgress(payload);
@@ -1082,6 +1121,7 @@ export class WorldScene extends Phaser.Scene {
     // okamžitě odemknout/zamknout „Vyzvednout odměnu" tlačítko.
     this.jobBoardPanel?.onInventoryChanged();
     this.questPanel?.onInventoryChanged();
+    this.shopPanel?.onInventoryChanged();
   }
 
   private handleEquipmentChanged(payload: EquipmentChanged): void {
@@ -1505,6 +1545,7 @@ export class WorldScene extends Phaser.Scene {
     this.gatherBar?.destroy();
     this.questPanel?.destroy();
     this.jobBoardPanel?.destroy();
+    this.shopPanel?.destroy();
     this.inventoryPanel = undefined;
     this.equipmentPanel = undefined;
     this.skillPanel = undefined;
@@ -1513,6 +1554,7 @@ export class WorldScene extends Phaser.Scene {
     this.gatherBar = undefined;
     this.questPanel = undefined;
     this.jobBoardPanel = undefined;
+    this.shopPanel = undefined;
 
     this.player = undefined;
     this.selfUserId = undefined;

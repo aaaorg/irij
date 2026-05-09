@@ -15,10 +15,10 @@
         },
         {
           "id": "shop",
-          "text": { "cs": "Co máš na prodej?", "en": "What do you have for sale?" },
-          "next": "shop_node",
+          "text": { "cs": "Ukaž mi, co kováš.", "en": "Show me what you forge." },
+          "next": null,
           "effects": [
-            { "type": "give_item", "item_id": "consumable.whetstone.t1", "quantity": 1 }
+            { "type": "open_shop", "merchant_table_id": "merchant.kovar_blatiny" }
           ]
         },
         {

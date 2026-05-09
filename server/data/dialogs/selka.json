@@ -17,6 +17,14 @@
           ]
         },
         {
+          "id": "shop",
+          "text": { "cs": "Co prodáváš a co kupuješ?", "en": "What do you sell and buy?" },
+          "next": null,
+          "effects": [
+            { "type": "open_shop", "merchant_table_id": "merchant.selka_general" }
+          ]
+        },
+        {
           "id": "weather",
           "text": { "cs": "Co je nového v Blatinách?", "en": "What's new in Blatiny?" },
           "next": "weather_node"

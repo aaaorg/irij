@@ -104,7 +104,8 @@ test('job board: full take → verify title + Zrušit → abandon flow', async (
   const dialogPanel = page.locator('#irij-dialog');
   await expect(dialogPanel).toBeVisible({ timeout: 8_000 });
   const dialogOptions = dialogPanel.locator('#irij-dialog-options button');
-  await expect(dialogOptions).toHaveCount(3, { timeout: 5_000 });
+  // Selka má 4 options (Phase 13 přidal „shop"): job_board, shop, weather, exit.
+  await expect(dialogOptions).toHaveCount(4, { timeout: 5_000 });
 
   // Click "Co je na hospodském boardu?".
   await dialogOptions.filter({ hasText: 'hospodském' }).click();
