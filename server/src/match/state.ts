@@ -27,6 +27,7 @@ import type {
   CraftStationDefinition,
   JobBoardTask,
   LootTable,
+  MerchantTableState,
   MobDefinition,
   NpcDefinition,
   PlayerQuestBlob,
@@ -199,6 +200,10 @@ export interface WorldMatchState {
   jobBoardTasks: { [taskId: string]: JobBoardTask };
   jobBoardTasksByVillage: { [villageId: string]: { [taskId: string]: true } };
   jobBoardCounter: number;
+  // Phase 13: NPC merchant — runtime stock + buy_limit per (table, item).
+  // Static definice v lib/merchants.ts. MVP: žádná Storage perzistence —
+  // server restart = full stock. Buy limity reset 00:00 UTC lazy-checked.
+  merchantStates: { [tableId: string]: MerchantTableState };
   // Per-player rate limit log pro JOB_BOARD_OPEN_REQUEST + take/submit/abandon
   // — sdílí interactRequestLog bucket, takže neopakujeme.
 }

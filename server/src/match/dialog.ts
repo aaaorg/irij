@@ -32,6 +32,7 @@ import { getItemDef } from '../lib/items.js';
 import { log } from '../lib/log.js';
 import { withOCCRetry } from '../lib/storage.js';
 import { sendJobBoardOpen } from './jobBoard.js';
+import { sendShopOpen } from './shop.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './movement.js';
 import {
   changeReputation,
@@ -459,6 +460,14 @@ function applyDialogEffect(
       logAudit(nk, 'dialog_open_job_board', {
         userId,
         payload: { village_id: effect.village_id, npc_id: issuerNpcId },
+      });
+      break;
+    }
+    case 'open_shop': {
+      sendShopOpen(state, dispatcher, presence, npcInstanceId, effect.merchant_table_id);
+      logAudit(nk, 'dialog_open_shop', {
+        userId,
+        payload: { merchant_table_id: effect.merchant_table_id, npc_id: npcInstanceId },
       });
       break;
     }

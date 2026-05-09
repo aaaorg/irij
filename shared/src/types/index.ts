@@ -6,3 +6,4 @@ export * from './npc.js';
 export * from './gathering.js';
 export * from './quest.js';
 export * from './jobBoard.js';
+export * from './shop.js';

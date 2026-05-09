@@ -134,12 +134,14 @@ test('dialog: open NPC dialog → click option → close', async ({ page }) => {
   const optionButtons = dialogPanel.locator('#irij-dialog-options button');
   await expect(optionButtons).toHaveCount(5, { timeout: 5_000 });
 
-  // 11) Click "Co máš na prodej?" option (gives whetstone, returns to root via shop_node)
-  const shopBtn = optionButtons.filter({ hasText: 'Co máš na prodej' });
-  await shopBtn.click();
+  // 11) Click "Jak se vede?" → advance to smalltalk_node (text changes).
+  //     Phase 13: původní "Co máš na prodej?" option teď otevírá shop panel
+  //     (open_shop effect, next: null) — testujeme přes shop.spec.ts.
+  const smalltalkBtn = optionButtons.filter({ hasText: 'Jak se vede' });
+  await smalltalkBtn.click();
 
-  // 12) Dialog should advance to shop_node — text changes
-  await expect(dialogPanel.locator('#irij-dialog-text')).toContainText('brusek', {
+  // 12) Dialog should advance to smalltalk_node — text changes.
+  await expect(dialogPanel.locator('#irij-dialog-text')).toContainText('Tělo bolí', {
     timeout: 5_000,
   });
 

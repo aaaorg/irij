@@ -248,22 +248,21 @@ describe('NPC + dialog catalog', () => {
     expect(npc?.dialog_id).toBe('kovar_blatiny');
   });
 
-  it('loads kovar_blatiny dialog tree with root + shop nodes', () => {
+  it('loads kovar_blatiny dialog tree with root', () => {
     const tree = getDialogTree('kovar_blatiny');
     expect(tree).not.toBeNull();
     expect(tree?.nodes['root']).toBeDefined();
-    expect(tree?.nodes['shop_node']).toBeDefined();
     expect(tree?.root_node_id).toBe('root');
   });
 
-  it('shop option in root node has give_item effect', () => {
+  it('shop option in root node opens kovar merchant table (Phase 13)', () => {
     const tree = getDialogTree('kovar_blatiny');
     const root = tree?.nodes['root'];
     const shopOpt = root?.options.find((o) => o.id === 'shop');
     expect(shopOpt).toBeDefined();
-    expect(shopOpt?.effects?.[0]?.type).toBe('give_item');
-    if (shopOpt?.effects?.[0]?.type === 'give_item') {
-      expect(shopOpt.effects[0].item_id).toBe('consumable.whetstone.t1');
+    expect(shopOpt?.effects?.[0]?.type).toBe('open_shop');
+    if (shopOpt?.effects?.[0]?.type === 'open_shop') {
+      expect(shopOpt.effects[0].merchant_table_id).toBe('merchant.kovar_blatiny');
     }
   });
 

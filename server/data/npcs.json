@@ -28,7 +28,7 @@
     "default_position": { "x": 22, "y": 27 },
     "flags": {
       "talkable": true,
-      "merchant": false,
+      "merchant": true,
       "quest_giver": false,
       "master": false,
       "crafter": false,
@@ -36,6 +36,7 @@
       "pickpocketable": false
     },
     "dialog_id": "selka",
-    "village_id": "village.blatiny"
+    "village_id": "village.blatiny",
+    "merchant_table_id": "merchant.selka_general"
   }
 ]

@@ -67,6 +67,7 @@ function makeState(presences: Record<string, PlayerPresenceState>): WorldMatchSt
     jobBoardTasks: {},
     jobBoardTasksByVillage: {},
     jobBoardCounter: 0,
+    merchantStates: {},
   };
 }
 
